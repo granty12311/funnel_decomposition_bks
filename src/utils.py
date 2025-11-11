@@ -8,7 +8,7 @@ from typing import Union
 from datetime import datetime
 
 
-def validate_dataframe(df: pd.DataFrame) -> None:
+def validate_dataframe(df: pd.DataFrame, date_column: str = 'month_begin_date') -> None:
     """
     Validate that the input DataFrame has the required columns.
 
@@ -16,6 +16,8 @@ def validate_dataframe(df: pd.DataFrame) -> None:
     ----------
     df : pd.DataFrame
         Input dataframe to validate
+    date_column : str
+        Name of the date column to check for (default 'month_begin_date')
 
     Raises
     ------
@@ -23,7 +25,7 @@ def validate_dataframe(df: pd.DataFrame) -> None:
         If required columns are missing
     """
     required_cols = [
-        'lender', 'month_begin_date', 'fico_bands', 'offer_comp_tier', 'prod_line',
+        'lender', date_column, 'fico_bands', 'offer_comp_tier', 'prod_line',
         'num_tot_bks', 'num_tot_apps', 'pct_of_total_apps',
         'str_apprv_rate', 'str_bk_rate', 'cond_apprv_rate', 'cond_bk_rate'
     ]

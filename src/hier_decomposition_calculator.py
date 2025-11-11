@@ -37,7 +37,8 @@ def calculate_decomposition(
     df: pd.DataFrame,
     date_a: Union[str, datetime, pd.Timestamp],
     date_b: Union[str, datetime, pd.Timestamp],
-    lender: str = 'ACA'
+    lender: str = 'ACA',
+    date_column: str = 'month_begin_date'
 ) -> DecompositionResults:
     """
     Calculate hierarchical decomposition between two dates.
@@ -52,6 +53,9 @@ def calculate_decomposition(
         Current period (Period 2)
     lender : str
         Lender to analyze (default 'ACA')
+    date_column : str
+        Name of the date column in the DataFrame (default 'month_begin_date').
+        Use 'week_begin_date' for weekly analysis or any other date column name.
 
     Returns
     -------
@@ -61,20 +65,20 @@ def calculate_decomposition(
         - segment_detail: Segment-level breakdown
         - metadata: Calculation metadata
     """
-    # Validate input
-    validate_dataframe(df)
+    # Validate input (including date column)
+    validate_dataframe(df, date_column=date_column)
 
     # Normalize dates
     date_a = normalize_date(date_a)
     date_b = normalize_date(date_b)
 
-    # Ensure month_begin_date is datetime
+    # Ensure date column is datetime
     df = df.copy()
-    df['month_begin_date'] = pd.to_datetime(df['month_begin_date'])
+    df[date_column] = pd.to_datetime(df[date_column])
 
     # Extract periods
-    df_1 = df[(df['lender'] == lender) & (df['month_begin_date'] == date_a)].copy()
-    df_2 = df[(df['lender'] == lender) & (df['month_begin_date'] == date_b)].copy()
+    df_1 = df[(df['lender'] == lender) & (df[date_column] == date_a)].copy()
+    df_2 = df[(df['lender'] == lender) & (df[date_column] == date_b)].copy()
 
     if len(df_1) == 0:
         raise ValueError(f"No data found for {lender} on {date_a.date()}")

@@ -69,7 +69,8 @@ class ModelDecompositionCalculator:
         ----------
         df : pd.DataFrame
             Full dataset with all months (pivoted format)
-            Must have columns: lender, month_begin_date, num_tot_bks, [features...]
+            Must have columns: lender, date column (e.g., month_begin_date, week_begin_date),
+            num_tot_bks, [features...]
         """
         # Extract features and target
         X, y = extract_features_and_target(df)
@@ -113,7 +114,8 @@ class ModelDecompositionCalculator:
         df: pd.DataFrame,
         date_a: Union[str, datetime],
         date_b: Union[str, datetime],
-        lender: str = 'ACA'
+        lender: str = 'ACA',
+        date_column: str = 'month_begin_date'
     ) -> ModelDecompositionResults:
         """
         Calculate SHAP-based decomposition between two dates.
@@ -130,6 +132,9 @@ class ModelDecompositionCalculator:
             Comparison period (Period 2)
         lender : str
             Lender identifier
+        date_column : str
+            Name of the date column in the DataFrame (default 'month_begin_date').
+            Use 'week_begin_date' for weekly analysis or any other date column name.
 
         Returns
         -------
@@ -142,13 +147,17 @@ class ModelDecompositionCalculator:
         if self.model is None:
             raise ValueError("Model not trained. Call fit() first.")
 
+        # Validate date column exists
+        if date_column not in df.columns:
+            raise ValueError(f"Date column '{date_column}' not found in DataFrame. Available columns: {df.columns.tolist()}")
+
         # Normalize dates
         date_a = pd.to_datetime(date_a)
         date_b = pd.to_datetime(date_b)
 
         # Filter to specific dates
-        df_date_a = df[df['month_begin_date'] == date_a].copy()
-        df_date_b = df[df['month_begin_date'] == date_b].copy()
+        df_date_a = df[df[date_column] == date_a].copy()
+        df_date_b = df[df[date_column] == date_b].copy()
 
         if len(df_date_a) == 0:
             raise ValueError(f"No data found for {date_a.date()}")
