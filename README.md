@@ -1,10 +1,10 @@
-# Funnel Decomposition Analysis
+# Funnel Decomposition Analysis - Production Code
 
 A hierarchical decomposition system to explain booking changes across multi-stage funnels with multiple segmentation dimensions.
 
 ## Overview
 
-This project implements a **waterfall decomposition** approach to answer questions like:
+This repository contains production-ready code for **waterfall decomposition** analysis to answer questions like:
 - "Bookings increased by 300 between Jan and Feb. What drove this change?"
 - "How much was due to volume vs. rate improvements?"
 - "Which FICO bands contributed most to the change?"
@@ -20,40 +20,23 @@ This project implements a **waterfall decomposition** approach to answer questio
 
 ---
 
-## Project Structure
+## Repository Structure
 
 ```
-funnel_decomposition/
-├── .venv/                              # Virtual environment
-├── data/
-│   ├── funnel_data_mock_v2.csv         # Mock data (576 rows, 24 months)
-│   ├── create_mock_data_v2.py          # Data generation script
-│   └── create_mock_data_pivoted.py     # Pivoted data generator
+prod_code/
 ├── src/
-│   ├── __init__.py                     # Package exports
-│   ├── hier_decomposition_calculator.py  # Hierarchical decomposition engine
-│   ├── visualization_engine.py         # Charts and exports
-│   ├── data_transformation.py          # Pivot/unpivot utilities
-│   └── utils.py                        # Helper functions
-├── notebooks/
-│   ├── funnel_decomposition_demo.ipynb        # Full demonstration
-│   ├── funnel_decomposition_demo_yoy_final.ipynb  # YoY analysis demo
-│   └── model_funnel_decomposition_executed.ipynb # Model integration
-├── examples/
-│   └── example_pivot_transformation.py # Data transformation demo
-├── tests/
-│   ├── test_integration.py             # Integration tests
-│   ├── test_visualization_improvements.py  # Visualization tests
-│   ├── test_data_transformation.py     # Transformation tests
-│   └── test_yoy_comparison.py          # YoY comparison test
-├── outputs/
-│   ├── waterfalls/                     # Waterfall chart grids
-│   ├── drilldowns/                     # Dimensional drilldown charts
-│   └── tables/                         # Excel/CSV exports
-├── docs/
-│   └── DATA_TRANSFORMATION.md          # Data transformation guide
-├── requirements.txt
-└── README.md                           # This file
+│   ├── __init__.py                            # Package exports
+│   ├── hier_decomposition_calculator.py       # Hierarchical decomposition engine
+│   ├── model_decomposition_calculator.py      # Model-based decomposition
+│   ├── symmetric_decomposition_calculator.py  # Symmetric decomposition approach
+│   ├── visualization_engine.py                # Charts and exports
+│   ├── data_transformation.py                 # Pivot/unpivot utilities
+│   └── utils.py                               # Helper functions
+├── hier_funnel_decomp_template.ipynb          # Hierarchical decomposition template
+├── model_funnel_decomp_template.ipynb         # Model-based decomposition template
+├── requirements.txt                           # Python dependencies
+├── .gitignore                                 # Git ignore rules
+└── README.md                                  # This file
 ```
 
 ---
@@ -63,30 +46,29 @@ funnel_decomposition/
 ### 1. Setup Environment
 
 ```bash
+# Create virtual environment
+python -m venv .venv
+
 # Activate virtual environment
 source .venv/bin/activate  # Linux/Mac
 # or
 .venv\Scripts\activate     # Windows
 
-# Install dependencies (if not already installed)
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Run Integration Tests
+### 2. Use Template Notebooks
 
-Validate that everything works:
+Open either template notebook to get started:
+- **hier_funnel_decomp_template.ipynb**: Hierarchical waterfall decomposition
+- **model_funnel_decomp_template.ipynb**: Model-based decomposition
 
-```bash
-# Run all tests
-python tests/test_integration.py
-python tests/test_visualization_improvements.py
-python tests/test_yoy_comparison.py
-```
-
-Expected output:
-```
-✓✓✓ ALL INTEGRATION TESTS PASSED ✓✓✓
-```
+Each notebook includes:
+- Data loading examples
+- Complete analysis workflow
+- Visualization generation
+- Export functionality
 
 ### 3. Basic Usage Example
 
@@ -101,8 +83,8 @@ sys.path.insert(0, str(Path.cwd() / 'src'))
 from hier_decomposition_calculator import calculate_decomposition
 from visualization_engine import create_waterfall_grid, create_dimension_drilldown
 
-# Load data
-df = pd.read_csv('data/funnel_data_mock_v2.csv')
+# Load your data (must match required schema)
+df = pd.read_csv('your_funnel_data.csv')
 df['month_begin_date'] = pd.to_datetime(df['month_begin_date'])
 
 # Calculate decomposition
@@ -136,9 +118,7 @@ fig_fico = create_dimension_drilldown(
 
 ## Data Schema
 
-### Input Data Structure
-
-The analysis requires data with the following columns:
+### Required Input Columns
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -236,17 +216,10 @@ results = calculate_decomposition(df, date_a, date_b, lender='ACA')
 - `segment_detail`: Segment-level breakdown (DataFrame)
 - `metadata`: Calculation metadata (dict)
 
-**Summary DataFrame Example**:
-```
-effect_type              booking_impact    pct_of_total_change
-volume_effect                  -1141.1               237.2
-mix_effect                         0.0                -0.0
-str_approval_effect              -45.8                 9.5
-cond_approval_effect             -36.2                 7.5
-str_booking_effect               613.4              -127.5
-cond_booking_effect              128.7               -26.8
-total_change                    -481.0               100.0
-```
+**Summary DataFrame Columns**:
+- `effect_type`: Type of effect (volume, mix, rates, etc.)
+- `booking_impact`: Numeric impact on bookings
+- `pct_of_total_change`: Percentage of total change
 
 **Segment Detail DataFrame**: 24 rows (one per segment) with:
 - Segment identifiers (fico_bands, offer_comp_tier, prod_line)
@@ -255,7 +228,29 @@ total_change                    -481.0               100.0
 - Deltas (Δ for each metric)
 - Effects (6 effect types + total)
 
-### Module 2: Visualization Engine
+### Module 2: Model Decomposition Calculator
+
+```python
+from model_decomposition_calculator import ModelDecompositionCalculator
+
+calculator = ModelDecompositionCalculator()
+results = calculator.calculate_decomposition(df, date_a, date_b, lender='ACA')
+```
+
+Model-based approach using regression to attribute changes.
+
+### Module 3: Symmetric Decomposition Calculator
+
+```python
+from symmetric_decomposition_calculator import SymmetricDecompositionCalculator
+
+calculator = SymmetricDecompositionCalculator()
+results = calculator.calculate_decomposition(df, date_a, date_b, lender='ACA')
+```
+
+Symmetric decomposition approach for balanced attribution.
+
+### Module 4: Visualization Engine
 
 #### Waterfall Grid
 
@@ -296,18 +291,6 @@ fig = create_dimension_drilldown(
 
 Creates 7-panel bar chart showing each effect by dimension values.
 
-#### Print Waterfall Breakdowns
-
-```python
-from visualization_engine import print_waterfall_breakdowns
-
-# After creating waterfall grid
-fig = create_waterfall_grid(summary, segment_detail, lender='ACA')
-print_waterfall_breakdowns(fig)
-```
-
-Displays detailed breakdown tables showing contribution of each dimension value to each effect.
-
 #### Export Summary Tables
 
 ```python
@@ -325,7 +308,7 @@ Exports:
 - Excel file with multiple sheets (Summary, Segment Detail, By FICO, By Comp, By Product)
 - CSV file with summary
 
-### Module 3: Data Transformation
+### Module 5: Data Transformation
 
 #### Pivot Funnel Data
 
@@ -392,101 +375,18 @@ fico_summary = results.segment_detail.groupby('fico_bands')[
 print(fico_summary)
 ```
 
-### Year-over-Year Comparison
-
-```python
-# Compare same month year-over-year
-results_yoy = calculate_decomposition(
-    df=df,
-    date_a='2023-01-01',
-    date_b='2024-01-01',
-    lender='ACA'
-)
-
-print(f"YoY Change: {results_yoy.metadata['delta_total_bookings']:,.0f}")
-print(results_yoy.summary)
-```
-
 ---
 
-## Testing
+## Module Summary
 
-### Run All Tests
-
-```bash
-# Integration tests
-python tests/test_integration.py
-
-# Visualization tests
-python tests/test_visualization_improvements.py
-
-# Data transformation tests
-python tests/test_data_transformation.py
-
-# YoY comparison
-python tests/test_yoy_comparison.py
-```
-
-### Test Coverage
-
-The test suite validates:
-1. ✅ Decomposition calculation for multiple date pairs
-2. ✅ Exact reconciliation (all effects sum to actual change)
-3. ✅ Waterfall chart generation with proper colors
-4. ✅ All 3 dimensional drilldowns (FICO, comp tier, product line)
-5. ✅ Excel and CSV table exports
-6. ✅ Data transformation round-trip (pivot → unpivot)
-7. ✅ Year-over-Year analysis
-
----
-
-## Notebooks
-
-### Interactive Demonstrations
-
-1. **funnel_decomposition_demo.ipynb**: Complete walkthrough with Year-over-Year analysis
-   - Load and explore data
-   - Calculate decomposition
-   - Create visualizations
-   - Export results
-
-2. **model_funnel_decomposition_executed.ipynb**: Integration with ML models
-   - Shows how to use decomposition insights for modeling
-
-### Running Notebooks
-
-```bash
-# Start Jupyter
-jupyter notebook
-
-# Or execute from command line
-jupyter nbconvert --to notebook --execute notebooks/funnel_decomposition_demo.ipynb
-```
-
----
-
-## Example Output
-
-### Sample YoY Analysis (Jan 2023 → Jan 2024)
-
-```
-Period 1 bookings: 4,480
-Period 2 bookings: 3,999
-Delta bookings: -481 (-10.7%)
-
-Key Findings:
-- Volume declined significantly (-1,141) - largest negative contributor
-- Booking rates improved (+613 straight, +129 conditional)
-- High FICO drove most improvements (+440 str booking, +68 cond booking)
-- Despite 25% volume decline, conversion improvements offset some impact
-```
-
-### Generated Files
-
-All outputs are saved to:
-- `outputs/waterfalls/` - PNG waterfall chart grids
-- `outputs/drilldowns/` - PNG dimensional drilldown charts
-- `outputs/tables/` - XLSX and CSV summary tables
+| Module | Purpose | Key Functions |
+|--------|---------|---------------|
+| `hier_decomposition_calculator.py` | Core hierarchical decomposition | `calculate_decomposition()` |
+| `model_decomposition_calculator.py` | Model-based decomposition | `ModelDecompositionCalculator` |
+| `symmetric_decomposition_calculator.py` | Symmetric decomposition | `SymmetricDecompositionCalculator` |
+| `visualization_engine.py` | Charts and exports | `create_waterfall_grid()`, `create_dimension_drilldown()`, `export_summary_tables()` |
+| `data_transformation.py` | Format conversion | `pivot_funnel_data()`, `unpivot_funnel_data()` |
+| `utils.py` | Helper functions | `validate_dataframe()`, `calculate_segment_bookings()` |
 
 ---
 
@@ -524,53 +424,13 @@ If you get `ValueError: Expected 24 segments`:
 
 ---
 
-## Documentation
+## Dependencies
 
-- **[DATA_TRANSFORMATION.md](docs/DATA_TRANSFORMATION.md)**: Guide to pivot/unpivot transformations
-- **[PLANNING.md](PLANNING.md)**: Original design document with ML approach
-
----
-
-## Next Steps
-
-### Immediate Use
-
-1. ✅ Run integration tests to validate setup
-2. ✅ Load your own data (matching the schema)
-3. ✅ Run decomposition on relevant date pairs
-4. ✅ Generate waterfalls and drilldowns for stakeholders
-
-### Future Enhancements
-
-- **Automated Reports**: Schedule monthly decomposition reports
-- **Interactive Dashboard**: Build Streamlit/Dash app for self-service
-- **Statistical Testing**: Add confidence intervals for effects
-- **ML Attribution**: Implement complementary ML approach (see PLANNING.md)
-- **Multi-Lender Support**: Compare decompositions across lenders
-- **Additional Metrics**: Extend to other funnel metrics beyond bookings
-
----
-
-## Contributing
-
-To extend the analysis:
-
-1. Add new metrics to `utils.py`
-2. Create new effect types in `hier_decomposition_calculator.py`
-3. Add visualizations to `visualization_engine.py`
-4. Extend transformations in `data_transformation.py`
-5. Update tests in `tests/` directory
-
----
-
-## Module Summary
-
-| Module | Purpose | Key Functions |
-|--------|---------|---------------|
-| `hier_decomposition_calculator.py` | Core decomposition engine | `calculate_decomposition()` |
-| `visualization_engine.py` | Charts and exports | `create_waterfall_grid()`, `create_dimension_drilldown()`, `export_summary_tables()` |
-| `data_transformation.py` | Format conversion | `pivot_funnel_data()`, `unpivot_funnel_data()` |
-| `utils.py` | Helper functions | `validate_dataframe()`, `calculate_segment_bookings()` |
+See `requirements.txt` for complete list. Key dependencies:
+- pandas
+- numpy
+- plotly
+- openpyxl (for Excel export)
 
 ---
 
@@ -580,6 +440,18 @@ This project is for internal use.
 
 ---
 
+## Contributing
+
+To extend the analysis:
+
+1. Add new metrics to `utils.py`
+2. Create new effect types in decomposition calculators
+3. Add visualizations to `visualization_engine.py`
+4. Extend transformations in `data_transformation.py`
+5. Update template notebooks with new examples
+
+---
+
 ## Contact
 
-For questions or issues, please refer to the documentation files in the `docs/` directory.
+For questions or issues, please contact the maintainer or refer to the template notebooks for examples.
