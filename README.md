@@ -34,6 +34,9 @@ prod_code/
 │   └── utils.py                               # Helper functions
 ├── hier_funnel_decomp_template.ipynb          # Hierarchical decomposition template
 ├── model_funnel_decomp_template.ipynb         # Model-based decomposition template
+├── symmetric_funnel_decomp.ipynb              # Symmetric decomposition template
+├── symmetric_funnel_decomp_weekly.ipynb       # Weekly symmetric decomposition
+├── symmetric_funnel_decomp_multi_lender.ipynb # Multi-lender symmetric decomposition
 ├── requirements.txt                           # Python dependencies
 ├── .gitignore                                 # Git ignore rules
 └── README.md                                  # This file
@@ -60,9 +63,16 @@ pip install -r requirements.txt
 
 ### 2. Use Template Notebooks
 
-Open either template notebook to get started:
+Choose from the following template notebooks to get started:
+
+**Core Templates:**
 - **hier_funnel_decomp_template.ipynb**: Hierarchical waterfall decomposition
 - **model_funnel_decomp_template.ipynb**: Model-based decomposition
+
+**Symmetric Decomposition Templates:**
+- **symmetric_funnel_decomp.ipynb**: Symmetric decomposition approach
+- **symmetric_funnel_decomp_weekly.ipynb**: Weekly period-over-period symmetric analysis
+- **symmetric_funnel_decomp_multi_lender.ipynb**: Multi-lender comparison with symmetric decomposition
 
 Each notebook includes:
 - Data loading examples
