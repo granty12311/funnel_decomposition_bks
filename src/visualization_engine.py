@@ -810,7 +810,9 @@ def create_lender_aggregate_waterfall(
     date_a: str,
     date_b: str,
     output_path: str = None,
-    title: str = None
+    title: str = None,
+    period_1_bks: float = None,
+    period_2_bks: float = None
 ) -> plt.Figure:
     """
     Create aggregate waterfall chart with lender-level breakdown.
@@ -832,6 +834,10 @@ def create_lender_aggregate_waterfall(
         Path to save the figure
     title : str, optional
         Custom title for the chart. If None, uses default title with date range.
+    period_1_bks : float, optional
+        Period 1 total bookings. If None, will be calculated from aggregate_summary.
+    period_2_bks : float, optional
+        Period 2 total bookings. If None, will be calculated from aggregate_summary.
 
     Returns
     -------
@@ -847,13 +853,23 @@ def create_lender_aggregate_waterfall(
     # Get lenders
     lenders = sorted(lender_summaries['lender'].unique())
 
-    # Calculate period values
-    period_1_bks = aggregate_summary[aggregate_summary['effect_type'] == 'total_change']['booking_impact'].iloc[0]
-    period_1_bks = period_1_bks - effects['booking_impact'].sum()
-    period_2_bks = period_1_bks + effects['booking_impact'].sum()
+    # Calculate period values if not provided
+    if period_1_bks is None or period_2_bks is None:
+        total_change = aggregate_summary[aggregate_summary['effect_type'] == 'total_change']['booking_impact'].iloc[0]
+        period_1_bks_calc = total_change - effects['booking_impact'].sum()
+        period_2_bks_calc = period_1_bks_calc + effects['booking_impact'].sum()
+
+        if period_1_bks is None:
+            period_1_bks = period_1_bks_calc
+        if period_2_bks is None:
+            period_2_bks = period_2_bks_calc
 
     # Create figure (increased height by ~50%)
     fig, ax = plt.subplots(figsize=(16, 12))
+
+    # Main title
+    fig.suptitle(f'Multi-Lender Booking Decomposition: {date_a} → {date_b}',
+                 fontsize=16, fontweight='bold', y=0.98)
 
     # Lender color palette (matching dimensional waterfall colors)
     lender_colors = {}
@@ -983,9 +999,9 @@ def create_lender_aggregate_waterfall(
     ax.set_xticks(x_pos)
     ax.set_xticklabels(_format_effect_labels(labels), rotation=45, ha='right')
     ax.set_ylabel('Bookings', fontsize=11, fontweight='bold')
-    # Use custom title if provided, otherwise use default with date range
-    chart_title = title if title is not None else f'Multi-Lender Booking Decomposition: {date_a} → {date_b}'
-    ax.set_title(chart_title, fontsize=12, fontweight='bold', pad=10)
+    # Use custom subtitle if provided, otherwise default to 'By Lender'
+    subtitle = title if title is not None else 'By Lender'
+    ax.set_title(subtitle, fontsize=12, fontweight='bold', pad=10)
     ax.set_ylim(y_min, y_max)
     ax.grid(axis='y', alpha=0.3, linestyle='--')
     ax.axhline(y=0, color='black', linewidth=0.8)
