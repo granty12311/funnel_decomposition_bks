@@ -35,10 +35,15 @@ def create_waterfall_grid(
     Create grid of waterfall charts showing booking decomposition.
 
     Creates a 2x2 grid:
-    - [0, 0]: Overall aggregate waterfall
-    - [0, 1]: By FICO band (stacked)
-    - [1, 0]: By offer comp tier (stacked)
-    - [1, 1]: By product line (stacked)
+    - [0, 0]: Overall aggregate waterfall (all effects as aggregate)
+    - [0, 1]: By FICO band (volume aggregate, other effects by FICO)
+    - [1, 0]: By offer comp tier (volume aggregate, other effects by tier)
+    - [1, 1]: By product line (volume aggregate, other effects by product)
+
+    Note: In dimensional charts, volume effect is shown as a single aggregate bar
+    (green/red based on sign) because volume is a lender-level metric independent
+    of dimensional mix. Other effects (mix, approval rates, booking rates) are
+    shown stacked by dimension to show each dimension's contribution.
 
     Parameters
     ----------
@@ -275,22 +280,28 @@ def _create_dimensional_waterfall(
     period_2_bks: float,
     title: str
 ) -> pd.DataFrame:
-    """Create diverging stacked waterfall chart by dimension for mixed effects clarity.
+    """Create dimensional waterfall chart with aggregate volume and stacked dimensional effects.
+
+    Volume effect is shown as a single aggregate bar, while other effects are broken down
+    by the specified dimension using stacked bars. This approach clarifies that volume
+    is a lender-level metric independent of dimensional mix.
 
     Returns DataFrame with breakdown details for display below chart.
     """
 
-    # Aggregate effects by dimension
-    dim_agg = _aggregate_by_dimension(segment_detail, dimension)
+    # Aggregate effects by dimension (excluding volume for separate treatment)
+    dim_agg, volume_total = _aggregate_by_dimension(segment_detail, dimension, exclude_volume=True)
 
-    # Get effect types (excluding total_change and interaction_effect)
-    effects = summary[
+    # Get effect types (excluding total_change, interaction_effect, and volume_effect)
+    # Volume will be plotted separately as aggregate
+    effects_dimensional = summary[
         (summary['effect_type'] != 'total_change') &
-        (summary['effect_type'] != 'interaction_effect')
+        (summary['effect_type'] != 'interaction_effect') &
+        (summary['effect_type'] != 'volume_effect')
     ]['effect_type'].tolist()
 
-    # Prepare data
-    labels = ['Start'] + effects + ['End']
+    # Prepare data - now includes volume as separate aggregate effect
+    labels = ['Start', 'Volume'] + effects_dimensional + ['End']
     x_pos = np.arange(len(labels))
 
     # Get unique dimension values
@@ -305,7 +316,14 @@ def _create_dimensional_waterfall(
     # Pre-calculate all cumulative values to set proper y-axis limits
     all_values = [period_1_bks, period_2_bks]
     temp_cumulative = period_1_bks
-    for effect in effects:
+
+    # Add volume effect (aggregate, not by dimension)
+    all_values.append(temp_cumulative)
+    temp_cumulative += volume_total
+    all_values.append(temp_cumulative)
+
+    # Add dimensional effects
+    for effect in effects_dimensional:
         effect_data = dim_agg[dim_agg['effect_type'] == effect]
         total_effect = effect_data['impact'].sum()
         all_values.append(temp_cumulative)  # Position before effect
@@ -355,9 +373,46 @@ def _create_dimensional_waterfall(
     # Track cumulative position for connectors
     cumulative = period_1_bks
 
-    # Plot each effect as diverging stacked bar
-    for i, effect in enumerate(effects):
-        x = i + 1
+    # Plot Volume effect as single aggregate bar (position 1)
+    volume_x = 1
+    if abs(volume_total) < 0.01:
+        # Zero volume - draw connector and marker
+        ax.plot([volume_x-1+0.3, volume_x-0.3], [cumulative, cumulative],
+               color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
+        ax.plot(volume_x, cumulative, marker='o', markersize=6, color=COLOR_CONNECTOR,
+               markeredgecolor='black', markeredgewidth=1.5, zorder=3)
+        ax.text(volume_x, cumulative - label_offset, '+0',
+               ha='center', va='top', fontsize=10, fontweight='bold',
+               bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                        edgecolor='black', linewidth=1.5, alpha=0.95))
+    else:
+        # Non-zero volume - draw aggregate bar
+        color = COLOR_POSITIVE if volume_total >= 0 else COLOR_NEGATIVE
+        bottom = cumulative if volume_total >= 0 else cumulative + volume_total
+        height = abs(volume_total)
+
+        rect = Rectangle((volume_x - 0.3, bottom), 0.6, height,
+                       facecolor=color, edgecolor='black', linewidth=1.5, alpha=0.9)
+        ax.add_patch(rect)
+
+        # Value label
+        label_y_pos = min(cumulative, cumulative + volume_total)
+        sign = '+' if volume_total >= 0 else ''
+        ax.text(volume_x, label_y_pos - label_offset, f'{sign}{format_number(volume_total, 0)}',
+               ha='center', va='top', fontsize=10, fontweight='bold',
+               bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                        edgecolor='black', linewidth=1.5, alpha=0.95))
+
+        # Connector from Start to Volume
+        ax.plot([volume_x-1+0.3, volume_x-0.3], [cumulative, cumulative],
+               color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
+
+    # Update cumulative after volume
+    cumulative += volume_total
+
+    # Plot each dimensional effect as diverging stacked bar
+    for i, effect in enumerate(effects_dimensional):
+        x = i + 2  # Offset by 2 to account for Start and Volume bars
 
         # Get values for this effect by dimension
         effect_data = dim_agg[dim_agg['effect_type'] == effect]
@@ -478,7 +533,7 @@ def _create_dimensional_waterfall(
     ax.grid(axis='y', alpha=0.3, linestyle='--')
     ax.axhline(y=0, color='black', linewidth=0.8)
 
-    # Enhanced legend showing green/red scheme - positioned inside chart, spread horizontally
+    # Enhanced legend showing dimensional breakdown (volume shown as aggregate bar, not in legend)
     legend_elements = []
 
     # Add dimension-specific green shades (positive)
@@ -504,8 +559,9 @@ def _create_dimensional_waterfall(
 
 def _aggregate_by_dimension(
     segment_detail: pd.DataFrame,
-    dimension: str
-) -> pd.DataFrame:
+    dimension: str,
+    exclude_volume: bool = False
+) -> Union[pd.DataFrame, tuple]:
     """
     Aggregate effects by dimension.
 
@@ -515,16 +571,25 @@ def _aggregate_by_dimension(
         Segment-level detail
     dimension : str
         Dimension to aggregate by
+    exclude_volume : bool, optional
+        If True, excludes volume_effect from dimensional aggregation and returns it separately.
+        Default is False for backward compatibility.
 
     Returns
     -------
-    pd.DataFrame
-        Aggregated effects by dimension
+    pd.DataFrame or tuple
+        If exclude_volume=False: DataFrame with aggregated effects by dimension
+        If exclude_volume=True: Tuple of (DataFrame with effects by dimension, float volume_total)
     """
     effect_cols = [
         'volume_effect', 'mix_effect', 'str_approval_effect',
         'cond_approval_effect', 'str_booking_effect', 'cond_booking_effect'
     ]
+
+    # Calculate volume total if excluding
+    if exclude_volume:
+        volume_total = segment_detail['volume_effect'].sum()
+        effect_cols = [e for e in effect_cols if e != 'volume_effect']
 
     results = []
     for effect in effect_cols:
@@ -533,7 +598,12 @@ def _aggregate_by_dimension(
         agg = agg.rename(columns={effect: 'impact'})
         results.append(agg)
 
-    return pd.concat(results, ignore_index=True)
+    aggregated = pd.concat(results, ignore_index=True)
+
+    if exclude_volume:
+        return aggregated, volume_total
+    else:
+        return aggregated
 
 
 def _format_effect_labels(labels: List[str]) -> List[str]:
@@ -602,6 +672,10 @@ def create_dimension_drilldown(
     """
     Create bar charts showing effect breakdown by a specific dimension.
 
+    Note: Volume effect is EXCLUDED from this drilldown because it is a lender-level
+    aggregate metric independent of dimensional mix. Only dimensional effects (mix,
+    approval rates, booking rates) are shown. Total Net Impact excludes volume effect.
+
     Parameters
     ----------
     segment_detail : pd.DataFrame
@@ -622,7 +696,10 @@ def create_dimension_drilldown(
     date_a = segment_detail['period_1_date'].iloc[0]
     date_b = segment_detail['period_2_date'].iloc[0]
 
-    # Aggregate by dimension
+    # Calculate volume effect as aggregate (lender-level, not by dimension)
+    volume_total = segment_detail['volume_effect'].sum()
+
+    # Aggregate effects by dimension
     dim_agg = segment_detail.groupby(dimension).agg({
         'total_effect': 'sum',
         'volume_effect': 'sum',
@@ -633,26 +710,28 @@ def create_dimension_drilldown(
         'cond_booking_effect': 'sum'
     }).reset_index()
 
-    # Create figure with 7 panels (2 cols × 4 rows)
-    fig, axes = plt.subplots(4, 2, figsize=(14, 16))
+    # Calculate total effect excluding volume (volume is aggregate, not dimensional)
+    dim_agg['total_effect_excl_volume'] = dim_agg['total_effect'] - dim_agg['volume_effect']
+
+    # Create figure with 6 panels (2 cols × 3 rows)
+    fig, axes = plt.subplots(3, 2, figsize=(14, 12))
     fig.suptitle(
         f'{lender} Booking Impact Decomposition by {dimension.replace("_", " ").title()}\n'
         f'{date_a} → {date_b}',
-        fontsize=14, fontweight='bold', y=0.995
+        fontsize=14, fontweight='bold', y=0.98
     )
 
     effects = [
-        ('total_effect', 'Total Net Impact'),
-        ('volume_effect', 'Volume Effect'),
-        ('mix_effect', 'Mix Effect'),
-        ('str_approval_effect', 'Straight Approval Effect'),
-        ('cond_approval_effect', 'Conditional Approval Effect'),
-        ('str_booking_effect', 'Straight Booking Effect'),
-        ('cond_booking_effect', 'Conditional Booking Effect')
+        ('total_effect_excl_volume', 'Total Net Impact (Excl. Volume)', True),  # By dimension, volume excluded
+        ('mix_effect', 'Mix Effect', True),  # By dimension
+        ('str_approval_effect', 'Straight Approval Effect', True),  # By dimension
+        ('cond_approval_effect', 'Conditional Approval Effect', True),  # By dimension
+        ('str_booking_effect', 'Straight Booking Effect', True),  # By dimension
+        ('cond_booking_effect', 'Conditional Booking Effect', True)  # By dimension
     ]
 
-    # Plot each effect
-    for idx, (effect_col, title) in enumerate(effects):
+    # Plot each effect (all by dimension, volume excluded)
+    for idx, (effect_col, title, by_dimension) in enumerate(effects):
         row = idx // 2
         col = idx % 2
         ax = axes[row, col]
@@ -702,15 +781,12 @@ def create_dimension_drilldown(
                    va='center', ha=h_align,
                    fontsize=10, fontweight='bold')
 
-        # Formatting
+        # Formatting (common for all panels)
         ax.set_xlabel('Booking Impact', fontsize=10, fontweight='bold')
         ax.set_title(title, fontsize=11, fontweight='bold', pad=10)
         ax.set_xlim(x_min, x_max)
         ax.axvline(x=0, color='black', linewidth=0.8)
         ax.grid(axis='x', alpha=0.3, linestyle='--')
-
-    # Hide the last panel (blank)
-    axes[3, 1].axis('off')
 
     plt.tight_layout()
 
@@ -733,7 +809,8 @@ def create_lender_aggregate_waterfall(
     aggregate_summary: pd.DataFrame,
     date_a: str,
     date_b: str,
-    output_path: str = None
+    output_path: str = None,
+    title: str = None
 ) -> plt.Figure:
     """
     Create aggregate waterfall chart with lender-level breakdown.
@@ -753,14 +830,19 @@ def create_lender_aggregate_waterfall(
         Period 2 date
     output_path : str, optional
         Path to save the figure
+    title : str, optional
+        Custom title for the chart. If None, uses default title with date range.
 
     Returns
     -------
     plt.Figure
         Matplotlib figure object
     """
-    # Exclude total_change from effects
-    effects = aggregate_summary[aggregate_summary['effect_type'] != 'total_change'].copy()
+    # Exclude total_change and interaction_effect from effects (to match grid behavior)
+    effects = aggregate_summary[
+        (aggregate_summary['effect_type'] != 'total_change') &
+        (aggregate_summary['effect_type'] != 'interaction_effect')
+    ].copy()
 
     # Get lenders
     lenders = sorted(lender_summaries['lender'].unique())
@@ -770,8 +852,8 @@ def create_lender_aggregate_waterfall(
     period_1_bks = period_1_bks - effects['booking_impact'].sum()
     period_2_bks = period_1_bks + effects['booking_impact'].sum()
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(16, 8))
+    # Create figure (increased height by ~50%)
+    fig, ax = plt.subplots(figsize=(16, 12))
 
     # Lender color palette (matching dimensional waterfall colors)
     lender_colors = {}
@@ -850,39 +932,26 @@ def create_lender_aggregate_waterfall(
         # Determine if positive or negative overall
         is_positive = total_impact >= 0
 
-        # Sort lenders appropriately for stacking
-        if is_positive:
-            # For positive: stack from bottom to top
-            lender_data = lender_data.sort_values('booking_impact', ascending=True)
-        else:
-            # For negative: stack from top to bottom  
-            lender_data = lender_data.sort_values('booking_impact', ascending=False)
+        # Sort lenders consistently for stacking (to match grid behavior)
+        lender_data = lender_data.sort_values('booking_impact', ascending=True)
 
         # Draw the stacked bar using rectangles
-        bottom = cumulative if is_positive else cumulative + total_impact
+        bottom = cumulative
         
         for _, lender_row in lender_data.iterrows():
             lender = lender_row['lender']
             lender_impact = lender_row['booking_impact']
-            
+
             if abs(lender_impact) < 0.01:
                 continue
-            
-            # Get lender color with green/red tint
-            base_color = lender_colors[lender]
-            # Mix with green or red based on sign
-            if lender_impact >= 0:
-                color = base_color  # Keep original for positive
-            else:
-                color = base_color  # Keep original for negative
-            
-            height = abs(lender_impact)
-            rect_bottom = bottom if lender_impact >= 0 else bottom - height
-            
-            rect = Rectangle((x_idx - 0.3, rect_bottom), 0.6, height,
+
+            color = lender_colors[lender]
+            height = lender_impact
+
+            rect = Rectangle((x_idx - 0.3, bottom), 0.6, height,
                            facecolor=color, edgecolor='black', linewidth=1.5, alpha=0.85)
             ax.add_patch(rect)
-            
+
             bottom = bottom + lender_impact
 
         # Add total effect label below the bar
@@ -914,24 +983,35 @@ def create_lender_aggregate_waterfall(
     ax.set_xticks(x_pos)
     ax.set_xticklabels(_format_effect_labels(labels), rotation=45, ha='right')
     ax.set_ylabel('Bookings', fontsize=11, fontweight='bold')
-    ax.set_title(f'Multi-Lender Booking Decomposition: {date_a} → {date_b}',
-                 fontsize=12, fontweight='bold', pad=10)
+    # Use custom title if provided, otherwise use default with date range
+    chart_title = title if title is not None else f'Multi-Lender Booking Decomposition: {date_a} → {date_b}'
+    ax.set_title(chart_title, fontsize=12, fontweight='bold', pad=10)
     ax.set_ylim(y_min, y_max)
     ax.grid(axis='y', alpha=0.3, linestyle='--')
     ax.axhline(y=0, color='black', linewidth=0.8)
 
     # Add legend with lenders
     legend_elements = [
-        mpatches.Patch(facecolor=lender_colors[lender], edgecolor='black', 
-                      label=lender, alpha=0.85) 
+        mpatches.Patch(facecolor=lender_colors[lender], edgecolor='black',
+                      label=lender, alpha=0.85)
         for lender in lenders
     ]
     legend_elements.append(
-        mpatches.Patch(facecolor=COLOR_TOTAL, edgecolor='black', 
+        mpatches.Patch(facecolor=COLOR_TOTAL, edgecolor='black',
                       label='Start/End', alpha=0.9)
     )
+
+    # Calculate ncol to limit legend width (use 2 rows for 6-7 lenders)
+    n_legend_items = len(legend_elements)
+    if n_legend_items >= 6:
+        # For 6-7 lenders, use 2 rows (ncol = ceil(n/2))
+        legend_ncol = (n_legend_items + 1) // 2
+    else:
+        # For fewer lenders, single row
+        legend_ncol = n_legend_items
+
     ax.legend(handles=legend_elements, loc='lower center', bbox_to_anchor=(0.5, 0.02),
-             ncol=len(legend_elements), frameon=True, fancybox=True, shadow=True,
+             ncol=legend_ncol, frameon=True, fancybox=True, shadow=True,
              fontsize=9, title='Lenders', title_fontsize=10)
 
     plt.tight_layout()
@@ -983,8 +1063,8 @@ def create_lender_drilldown(
         'cond_booking_effect'
     ]
 
-    # Create figure with subplots (3 rows x 2 cols for 6 effects)
-    fig, axes = plt.subplots(3, 2, figsize=(16, 10))
+    # Create figure with subplots (3 rows x 2 cols for 6 effects, increased height by ~50%)
+    fig, axes = plt.subplots(3, 2, figsize=(16, 15))
     axes = axes.flatten()
 
     fig.suptitle(f'Multi-Lender Booking Impact Decomposition by Effect\n{date_a} → {date_b}',
@@ -1138,8 +1218,8 @@ def create_lender_waterfall_grid(
     plt.Figure
         Matplotlib figure object
     """
-    # Create figure with 1x2 grid (optimized for 2 panels)
-    fig, axes = plt.subplots(1, 2, figsize=(20, 5))
+    # Create figure with 1x2 grid (optimized for 2 panels, increased height by ~50%)
+    fig, axes = plt.subplots(1, 2, figsize=(20, 7.5))
 
     # Extract metadata
     date_a = metadata['date_a']
@@ -1309,16 +1389,26 @@ def create_lender_waterfall_grid(
     
     # Add legend with lender colors
     legend_elements = [
-        mpatches.Patch(facecolor=lender_colors[lender], edgecolor='black', 
-                      label=lender, alpha=0.85) 
+        mpatches.Patch(facecolor=lender_colors[lender], edgecolor='black',
+                      label=lender, alpha=0.85)
         for lender in lenders
     ]
     legend_elements.append(
-        mpatches.Patch(facecolor=COLOR_TOTAL, edgecolor='black', 
+        mpatches.Patch(facecolor=COLOR_TOTAL, edgecolor='black',
                       label='Start/End', alpha=0.9)
     )
+
+    # Calculate ncol to limit legend width (use 2 rows for 6-7 lenders)
+    n_legend_items = len(legend_elements)
+    if n_legend_items >= 6:
+        # For 6-7 lenders, use 2 rows (ncol = ceil(n/2))
+        legend_ncol = (n_legend_items + 1) // 2
+    else:
+        # For fewer lenders, single row
+        legend_ncol = n_legend_items
+
     ax.legend(handles=legend_elements, loc='lower center', bbox_to_anchor=(0.5, 0.02),
-             ncol=len(legend_elements), frameon=True, fancybox=True, shadow=True,
+             ncol=legend_ncol, frameon=True, fancybox=True, shadow=True,
              fontsize=9, title='Lenders', title_fontsize=10)
     
     plt.tight_layout()

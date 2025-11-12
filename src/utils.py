@@ -5,7 +5,7 @@ Utility functions for funnel decomposition analysis.
 import pandas as pd
 import numpy as np
 from typing import Union
-from datetime import datetime
+from datetime import datetime, date
 
 
 def validate_dataframe(df: pd.DataFrame, date_column: str = 'month_begin_date') -> None:
@@ -36,13 +36,13 @@ def validate_dataframe(df: pd.DataFrame, date_column: str = 'month_begin_date') 
         raise ValueError(f"Missing required columns: {missing}")
 
 
-def normalize_date(date: Union[str, datetime, pd.Timestamp]) -> pd.Timestamp:
+def normalize_date(date_input: Union[str, datetime, date, pd.Timestamp]) -> pd.Timestamp:
     """
     Normalize date input to pandas Timestamp.
 
     Parameters
     ----------
-    date : str, datetime, or pd.Timestamp
+    date_input : str, datetime, date, or pd.Timestamp
         Date to normalize
 
     Returns
@@ -50,14 +50,16 @@ def normalize_date(date: Union[str, datetime, pd.Timestamp]) -> pd.Timestamp:
     pd.Timestamp
         Normalized timestamp
     """
-    if isinstance(date, str):
-        return pd.to_datetime(date)
-    elif isinstance(date, datetime):
-        return pd.Timestamp(date)
-    elif isinstance(date, pd.Timestamp):
-        return date
+    if isinstance(date_input, str):
+        return pd.to_datetime(date_input)
+    elif isinstance(date_input, pd.Timestamp):
+        return date_input
+    elif isinstance(date_input, datetime):
+        return pd.Timestamp(date_input)
+    elif isinstance(date_input, date):
+        return pd.Timestamp(date_input)
     else:
-        raise ValueError(f"Unsupported date type: {type(date)}")
+        raise ValueError(f"Unsupported date type: {type(date_input)}")
 
 
 def calculate_segment_bookings(df: pd.DataFrame) -> pd.DataFrame:
@@ -106,9 +108,11 @@ def validate_period_data(df: pd.DataFrame, date: pd.Timestamp, lender: str) -> N
     Validate data for a specific period.
 
     Checks:
-    - Has exactly 18 segments
     - pct_of_total_apps sums to ~1.0
     - segment_bookings sum to num_tot_bks
+
+    Note: Segment count check has been removed as certain segments
+    could be missing due to lack of volume.
 
     Parameters
     ----------
@@ -124,13 +128,6 @@ def validate_period_data(df: pd.DataFrame, date: pd.Timestamp, lender: str) -> N
     ValueError
         If validation checks fail
     """
-    # Check segment count (18 for 3 FICO bands, 24 for 4 FICO bands)
-    n_segments = len(df)
-    if n_segments not in [18, 24]:
-        raise ValueError(
-            f"Expected 18 or 24 segments for {lender} on {date.date()}, found {n_segments}"
-        )
-
     # Check pct_of_total_apps sums to 1.0
     pct_sum = df['pct_of_total_apps'].sum()
     if not np.isclose(pct_sum, 1.0, atol=1e-6):
