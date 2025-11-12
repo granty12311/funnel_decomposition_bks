@@ -58,8 +58,8 @@ Shared visualization engine across all methodologies:
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
-cd funnel_decomposition
+git clone https://github.com/granty12311/funnel_decomposition_bks.git
+cd funnel_decomposition_bks
 ```
 
 2. Install required dependencies:
@@ -135,13 +135,10 @@ fig = visualization_engine.create_waterfall_grid(
 - **`symmetric_funnel_decomp_multi_lender.ipynb`** - Multi-lender analysis template
 - **`symmetric_funnel_decomp_weekly.ipynb`** - Weekly analysis template
 
-### 🛠️ Utilities
-- **`chart_export.ipynb`** - Chart extraction and PNG export utilities
-
 ## Project Structure
 
 ```
-funnel_decomposition/
+funnel_decomposition_bks/
 ├── src/                                    # Core source code
 │   ├── __init__.py
 │   ├── symmetric_decomposition_calculator.py  # Symmetric methodology
@@ -152,13 +149,10 @@ funnel_decomposition/
 │   └── data_transformation.py                # Data prep utilities
 │
 ├── funnel_decomposition_demo.ipynb        # ⭐ START HERE
-├── chart_export.ipynb                     # Chart export utilities
-├── symmetric_funnel_decomp.ipynb          # Templates
-├── symmetric_funnel_decomp_multi_lender.ipynb
-├── symmetric_funnel_decomp_weekly.ipynb
-├── hier_funnel_decomp.ipynb
-│
-├── requirements.txt                       # Python dependencies
+├── symmetric_funnel_decomp.ipynb          # Symmetric decomposition template
+├── hier_funnel_decomp.ipynb               # Hierarchical decomposition template
+├── symmetric_funnel_decomp_multi_lender.ipynb  # Multi-lender analysis
+├── symmetric_funnel_decomp_weekly.ipynb   # Weekly analysis template
 └── README.md                             # This file
 ```
 
@@ -278,22 +272,26 @@ fig_prod = visualization_engine.create_dimension_drilldown(
 )
 ```
 
-### 4. Chart Export
+### 4. Chart Export and Saving
 
-Extract and export individual charts:
+Save visualizations directly:
 
 ```python
-# See chart_export.ipynb for detailed examples
+# Save waterfall grid
+fig = visualization_engine.create_waterfall_grid(
+    summary=results.summary,
+    segment_detail=results.segment_detail,
+    lender='ACA'
+)
+fig.savefig('output/waterfall_grid.png', dpi=300, bbox_inches='tight')
 
-# Extract individual charts from grid
-charts = extract_individual_charts_from_grid(fig)
-# Returns: [Overall, FICO, Comp Tier, Product Line]
-
-# Export individual chart
-export_chart(charts[0], 'output/overall_waterfall.png', dpi=300)
-
-# Batch export
-export_chart_list(charts, 'output/waterfall', prefix='chart')
+# Save dimension drilldown
+fig_fico = visualization_engine.create_dimension_drilldown(
+    segment_detail=results.segment_detail,
+    dimension='fico_bands',
+    lender='ACA'
+)
+fig_fico.savefig('output/fico_drilldown.png', dpi=300, bbox_inches='tight')
 ```
 
 ## Results Structure
