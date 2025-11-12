@@ -145,6 +145,7 @@ def _create_aggregate_waterfall(
     """Create simple aggregate waterfall chart."""
 
     # Get effects (excluding total_change and interaction_effect)
+    # Interaction effect is typically very small and not shown in charts
     effects = summary[
         (summary['effect_type'] != 'total_change') &
         (summary['effect_type'] != 'interaction_effect')
@@ -180,9 +181,8 @@ def _create_aggregate_waterfall(
     data_max = max(all_values)
     data_range = data_max - data_min
 
-    # Y-min: Start 50% of range below the minimum of Start/End bars
-    start_end_min = min(period_1_bks, period_2_bks)
-    y_min = start_end_min - (data_range * 0.50)  # 50% of range below
+    # Y-min: 50% of range below the minimum waterfall point
+    y_min = data_min - (data_range * 0.50)  # 50% of range below
 
     # Y-max: 20% of range above the maximum value
     y_max = data_max + (data_range * 0.20)  # 20% of range above
@@ -292,15 +292,16 @@ def _create_dimensional_waterfall(
     # Aggregate effects by dimension (excluding volume for separate treatment)
     dim_agg, volume_total = _aggregate_by_dimension(segment_detail, dimension, exclude_volume=True)
 
-    # Get effect types (excluding total_change, interaction_effect, and volume_effect)
+    # Get effect types (excluding total_change, volume_effect, and interaction_effect)
     # Volume will be plotted separately as aggregate
+    # Interaction effect is typically very small and not shown in charts
     effects_dimensional = summary[
         (summary['effect_type'] != 'total_change') &
         (summary['effect_type'] != 'interaction_effect') &
         (summary['effect_type'] != 'volume_effect')
     ]['effect_type'].tolist()
 
-    # Prepare data - now includes volume as separate aggregate effect
+    # Prepare data - includes volume as separate aggregate effect
     labels = ['Start', 'Volume'] + effects_dimensional + ['End']
     x_pos = np.arange(len(labels))
 
@@ -350,9 +351,8 @@ def _create_dimensional_waterfall(
     data_max = max(all_values)
     data_range = data_max - data_min
 
-    # Y-min: Start 50% of range below the minimum of Start/End bars
-    start_end_min = min(period_1_bks, period_2_bks)
-    y_min = start_end_min - (data_range * 0.50)  # 50% of range below
+    # Y-min: 50% of range below the minimum waterfall point
+    y_min = data_min - (data_range * 0.50)  # 50% of range below
 
     # Y-max: 20% of range above the maximum value
     y_max = data_max + (data_range * 0.20)  # 20% of range above
@@ -616,7 +616,10 @@ def _format_effect_labels(labels: List[str]) -> List[str]:
         'str_approval_effect': 'Str Apprv',
         'cond_approval_effect': 'Cond Apprv',
         'str_booking_effect': 'Str Book',
-        'cond_booking_effect': 'Cond Book'
+        'cond_booking_effect': 'Cond Book',
+        'interaction_effect': 'Interaction',
+        'lender_addition': 'Lender Add',
+        'lender_removal': 'Lender Exit'
     }
     return [label_map.get(l, l) for l in labels]
 
@@ -844,7 +847,8 @@ def create_lender_aggregate_waterfall(
     plt.Figure
         Matplotlib figure object
     """
-    # Exclude total_change and interaction_effect from effects (to match grid behavior)
+    # Exclude total_change and interaction_effect from effects
+    # Interaction effect is typically very small and not shown in charts
     effects = aggregate_summary[
         (aggregate_summary['effect_type'] != 'total_change') &
         (aggregate_summary['effect_type'] != 'interaction_effect')
@@ -903,8 +907,7 @@ def create_lender_aggregate_waterfall(
     data_max = max(all_values)
     data_range = data_max - data_min
 
-    start_end_min = min(period_1_bks, period_2_bks)
-    y_min = start_end_min - (data_range * 0.50)
+    y_min = data_min - (data_range * 0.50)
     y_max = data_max + (data_range * 0.20)
     y_range = y_max - y_min
     label_offset = y_range * 0.03
@@ -943,6 +946,8 @@ def create_lender_aggregate_waterfall(
                    ha='center', va='top', fontsize=9, fontweight='bold',
                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
                             edgecolor='black', linewidth=1.5, alpha=0.95))
+            # Update cumulative even for zero impact to maintain consistency
+            cumulative += total_impact
             continue
 
         # Determine if positive or negative overall
@@ -953,7 +958,7 @@ def create_lender_aggregate_waterfall(
 
         # Draw the stacked bar using rectangles
         bottom = cumulative
-        
+
         for _, lender_row in lender_data.iterrows():
             lender = lender_row['lender']
             lender_impact = lender_row['booking_impact']
@@ -1249,11 +1254,12 @@ def create_lender_waterfall_grid(
                  fontsize=16, fontweight='bold', y=0.96)
 
     # Exclude total_change and interaction_effect from effects
+    # Interaction effect is typically very small and not shown in charts
     effects = aggregate_summary[
         (aggregate_summary['effect_type'] != 'total_change') &
         (aggregate_summary['effect_type'] != 'interaction_effect')
     ].copy()
-    
+
     # ========================================================================
     # LEFT PANEL: Overall Aggregate Waterfall
     # ========================================================================
@@ -1301,16 +1307,15 @@ def create_lender_waterfall_grid(
     data_min = min(all_values)
     data_max = max(all_values)
     data_range = data_max - data_min
-    
-    start_end_min = min(period_1_bks, period_2_bks)
-    y_min = start_end_min - (data_range * 0.50)
+
+    y_min = data_min - (data_range * 0.50)
     y_max = data_max + (data_range * 0.20)
     y_range = y_max - y_min
     label_offset = y_range * 0.03
-    
+
     # Plot positions
     x_pos = np.arange(len(labels))
-    
+
     # Plot Start bar
     ax.bar(0, period_1_bks, color=COLOR_TOTAL, edgecolor='black', linewidth=1.5, width=0.6)
     ax.text(0, period_1_bks/2 + y_min/2, format_number(period_1_bks, 0),
@@ -1327,7 +1332,7 @@ def create_lender_waterfall_grid(
         
         # Get breakdown by lender for this effect
         lender_data = lender_summaries[lender_summaries['effect_type'] == effect_type].copy()
-        
+
         # Handle zero impact specially
         if abs(total_impact) < 0.01:
             # Draw connector line
@@ -1342,33 +1347,35 @@ def create_lender_waterfall_grid(
                    ha='center', va='top', fontsize=9, fontweight='bold',
                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
                             edgecolor='black', linewidth=1.5, alpha=0.95))
+            # Update cumulative even for zero impact to maintain consistency
+            cumulative += total_impact
             continue
-        
+
         # Determine if positive or negative overall
         is_positive = total_impact >= 0
-        
+
         # Sort lenders for consistent stacking
         lender_data = lender_data.sort_values('booking_impact', ascending=True)
-        
+
         # Draw the stacked bar using rectangles
         bottom = cumulative
-        
+
         for _, lender_row in lender_data.iterrows():
             lender = lender_row['lender']
             lender_impact = lender_row['booking_impact']
-            
+
             if abs(lender_impact) < 0.01:
                 continue
-            
+
             color = lender_colors[lender]
             height = lender_impact
-            
+
             rect = Rectangle((x_idx - 0.3, bottom), 0.6, height,
                            facecolor=color, edgecolor='black', linewidth=1.5, alpha=0.85)
             ax.add_patch(rect)
-            
+
             bottom = bottom + lender_impact
-        
+
         # Add total effect label below the bar
         label_y_pos = min(cumulative, cumulative + total_impact)
         sign = '+' if total_impact >= 0 else ''
@@ -1376,12 +1383,12 @@ def create_lender_waterfall_grid(
                ha='center', va='top', fontsize=9, fontweight='bold',
                bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
                         edgecolor='black', linewidth=1.5, alpha=0.95))
-        
+
         # Draw connector line from previous position
         prev_y = cumulative
         ax.plot([x_idx-1+0.3, x_idx-0.3], [prev_y, prev_y],
                color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
-        
+
         cumulative += total_impact
     
     # Plot End bar

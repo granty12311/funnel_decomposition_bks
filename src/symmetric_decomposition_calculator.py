@@ -470,6 +470,9 @@ def calculate_multi_lender_decomposition(
     """
     Calculate symmetric decomposition across multiple lenders.
 
+    Handles cases where lenders appear in only one time period by treating
+    the missing period as having zero values for all metrics.
+
     Parameters
     ----------
     df : pd.DataFrame
@@ -493,21 +496,69 @@ def calculate_multi_lender_decomposition(
         - lender_details: Full decomposition results for each lender
         - metadata: Calculation metadata
     """
-    # Get list of lenders
+    # Normalize dates
+    date_a = normalize_date(date_a)
+    date_b = normalize_date(date_b)
+
+    # Ensure date column is datetime
+    df = df.copy()
+    df[date_column] = pd.to_datetime(df[date_column])
+
+    # Get list of lenders across both periods
     if lenders is None:
-        lenders = sorted(df['lender'].unique())
+        lenders_a = set(df[df[date_column] == date_a]['lender'].unique())
+        lenders_b = set(df[df[date_column] == date_b]['lender'].unique())
+        lenders = sorted(lenders_a | lenders_b)  # Union of both periods
+    else:
+        lenders_a = set(df[df[date_column] == date_a]['lender'].unique())
+        lenders_b = set(df[df[date_column] == date_b]['lender'].unique())
+
+    # Check for lenders missing in each period
+    missing_in_a = [l for l in lenders if l not in lenders_a]
+    missing_in_b = [l for l in lenders if l not in lenders_b]
+
+    # Warn user about missing lenders
+    if missing_in_a:
+        warnings.warn(
+            f"The following lenders are missing in Period 1 ({date_a.date()}) and will be treated as zeros: {', '.join(missing_in_a)}",
+            UserWarning
+        )
+    if missing_in_b:
+        warnings.warn(
+            f"The following lenders are missing in Period 2 ({date_b.date()}) and will be treated as zeros: {', '.join(missing_in_b)}",
+            UserWarning
+        )
 
     # Calculate decomposition for each lender
     lender_results = {}
     for lender in lenders:
         print(f"Calculating decomposition for {lender}...")
-        results = calculate_decomposition(
-            df=df,
-            date_a=date_a,
-            date_b=date_b,
-            lender=lender,
-            date_column=date_column
-        )
+
+        # Check if data exists for this lender in both periods
+        has_data_a = lender in lenders_a
+        has_data_b = lender in lenders_b
+
+        if has_data_a and has_data_b:
+            # Normal case - data exists in both periods
+            results = calculate_decomposition(
+                df=df,
+                date_a=date_a,
+                date_b=date_b,
+                lender=lender,
+                date_column=date_column
+            )
+        else:
+            # Special case - create decomposition with zeros for missing period
+            results = _calculate_decomposition_with_missing_period(
+                df=df,
+                date_a=date_a,
+                date_b=date_b,
+                lender=lender,
+                date_column=date_column,
+                has_data_a=has_data_a,
+                has_data_b=has_data_b
+            )
+
         lender_results[lender] = results
 
     # Aggregate results
@@ -542,6 +593,124 @@ def calculate_multi_lender_decomposition(
     )
 
 
+def _calculate_decomposition_with_missing_period(
+    df: pd.DataFrame,
+    date_a: pd.Timestamp,
+    date_b: pd.Timestamp,
+    lender: str,
+    date_column: str,
+    has_data_a: bool,
+    has_data_b: bool
+) -> DecompositionResults:
+    """
+    Calculate decomposition when one period is missing data for a lender.
+
+    For lenders that appear or disappear, the entire change is attributed to
+    'lender_addition' or 'lender_removal' rather than breaking it down into
+    volume/mix/rate effects (which would create artificial interaction effects).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Full dataset
+    date_a : pd.Timestamp
+        Period 1 date
+    date_b : pd.Timestamp
+        Period 2 date
+    lender : str
+        Lender name
+    date_column : str
+        Date column name
+    has_data_a : bool
+        Whether data exists for period A
+    has_data_b : bool
+        Whether data exists for period B
+
+    Returns
+    -------
+    DecompositionResults
+        Decomposition results with entire change as lender addition/removal
+    """
+    # Determine which period has data
+    if has_data_a:
+        df_real = df[(df['lender'] == lender) & (df[date_column] == date_a)].copy()
+        real_period = 1
+        effect_type = 'lender_removal'
+    else:
+        df_real = df[(df['lender'] == lender) & (df[date_column] == date_b)].copy()
+        real_period = 2
+        effect_type = 'lender_addition'
+
+    # Calculate derived metrics for real period
+    df_real = calculate_segment_bookings(df_real)
+
+    # Validate the real period
+    if real_period == 1:
+        validate_period_data(df_real, date_a, lender)
+    else:
+        validate_period_data(df_real, date_b, lender)
+
+    # Get total bookings from the real period
+    total_bookings = float(df_real['num_tot_bks'].iloc[0])
+
+    # The entire change is attributed to lender addition/removal
+    # For lender_addition: 0 → total_bookings (positive)
+    # For lender_removal: total_bookings → 0 (negative)
+    booking_change = total_bookings if effect_type == 'lender_addition' else -total_bookings
+
+    # Create simplified summary (no volume/mix/rate breakdown)
+    summary = pd.DataFrame({
+        'effect_type': [effect_type, 'total_change'],
+        'booking_impact': [booking_change, booking_change]
+    })
+
+    # Create simplified segment detail (minimal information)
+    # Use the real period's segments as template
+    segment_detail = df_real[['fico_bands', 'offer_comp_tier', 'prod_line']].copy()
+
+    # Add period information
+    segment_detail['period_1_date'] = str(date_a.date())
+    segment_detail['period_2_date'] = str(date_b.date())
+
+    # Add bookings
+    if real_period == 1:
+        segment_detail['period_1_total_apps'] = df_real['num_tot_apps'].iloc[0]
+        segment_detail['period_2_total_apps'] = 0
+        segment_detail['period_1_segment_bookings'] = df_real['segment_bookings']
+        segment_detail['period_2_segment_bookings'] = 0.0
+    else:
+        segment_detail['period_1_total_apps'] = 0
+        segment_detail['period_2_total_apps'] = df_real['num_tot_apps'].iloc[0]
+        segment_detail['period_1_segment_bookings'] = 0.0
+        segment_detail['period_2_segment_bookings'] = df_real['segment_bookings']
+
+    # Add the single effect
+    segment_detail[effect_type] = segment_detail['period_2_segment_bookings'] - segment_detail['period_1_segment_bookings']
+    segment_detail['total_effect'] = segment_detail[effect_type]
+
+    # Prepare metadata
+    metadata = {
+        'lender': lender,
+        'date_a': str(date_a.date()),
+        'date_b': str(date_b.date()),
+        'period_1_total_apps': int(df_real['num_tot_apps'].iloc[0]) if real_period == 1 else 0,
+        'period_2_total_apps': int(df_real['num_tot_apps'].iloc[0]) if real_period == 2 else 0,
+        'period_1_total_bookings': total_bookings if real_period == 1 else 0.0,
+        'period_2_total_bookings': total_bookings if real_period == 2 else 0.0,
+        'delta_total_bookings': booking_change,
+        'num_segments': len(segment_detail),
+        'calculation_timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'method': 'lender_structural_change',
+        'missing_period': 'period_1' if not has_data_a else 'period_2'
+    }
+
+    return DecompositionResults(
+        summary=summary,
+        segment_detail=segment_detail,
+        metadata=metadata
+    )
+
+
 def _create_lender_summaries(lender_results: dict) -> pd.DataFrame:
     """
     Create a summary table with effects broken down by lender.
@@ -570,34 +739,49 @@ def _create_aggregate_summary(lender_results: dict) -> pd.DataFrame:
     """
     Create an aggregate summary combining all lenders.
 
+    Dynamically handles standard effects (volume, mix, rates, interaction) as well as
+    structural effects (lender_addition, lender_removal).
+
     Returns a DataFrame with total impact for each effect type.
     """
-    # Initialize aggregates
-    effect_types = [
-        'volume_effect',
-        'mix_effect',
-        'str_approval_effect',
-        'cond_approval_effect',
-        'str_booking_effect',
-        'cond_booking_effect',
-        'interaction_effect',
-        'total_change'
-    ]
+    # Collect all unique effect types across all lenders
+    all_effect_types = set()
+    for lender, results in lender_results.items():
+        all_effect_types.update(results.summary['effect_type'].tolist())
 
-    aggregates = {effect_type: 0.0 for effect_type in effect_types}
+    # Initialize aggregates for all effect types found
+    aggregates = {effect_type: 0.0 for effect_type in all_effect_types}
 
     # Sum across all lenders
     for lender, results in lender_results.items():
         for _, row in results.summary.iterrows():
             effect_type = row['effect_type']
             impact = row['booking_impact']
-            if effect_type in aggregates:
-                aggregates[effect_type] += impact
+            aggregates[effect_type] += impact
 
-    # Create DataFrame
+    # Define standard ordering (with fallback for any unexpected types)
+    standard_order = [
+        'volume_effect',
+        'mix_effect',
+        'str_approval_effect',
+        'cond_approval_effect',
+        'str_booking_effect',
+        'cond_booking_effect',
+        'lender_addition',
+        'lender_removal',
+        'interaction_effect',
+        'total_change'
+    ]
+
+    # Sort effect types by standard order, keeping any unexpected types at the end
+    sorted_effects = [et for et in standard_order if et in aggregates]
+    remaining = [et for et in aggregates.keys() if et not in standard_order]
+    sorted_effects.extend(remaining)
+
+    # Create DataFrame with sorted effects
     aggregate_df = pd.DataFrame({
-        'effect_type': list(aggregates.keys()),
-        'booking_impact': list(aggregates.values())
+        'effect_type': sorted_effects,
+        'booking_impact': [aggregates[et] for et in sorted_effects]
     })
 
     return aggregate_df

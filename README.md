@@ -31,7 +31,8 @@ All methodologies decompose booking changes into:
 
 ### 🎯 Advanced Capabilities
 
-- **Multi-Lender Analysis**: Aggregate and lender-attributed decomposition
+- **Multi-Lender Analysis**: Aggregate and lender-attributed decomposition with automatic lender addition/removal tracking
+- **Structural Change Tracking**: Separate effects for lender additions and exits (eliminates artificial interaction effects)
 - **Weekly/Monthly Granularity**: Flexible `date_column` parameter for any time frequency
 - **Dimensional Breakdowns**: Analyze by FICO bands, offer competition tier, product line
 - **Segment-Level Detail**: Deep-dive into specific dimension combinations
@@ -471,7 +472,30 @@ For questions, issues, or feature requests:
 
 ## Changelog
 
-### Latest Release (v2.0.0)
+### Latest Release (v2.1.0)
+
+#### New Features
+- ✅ **Lender Addition/Removal Tracking**: Structural lender changes now tracked separately from operational effects
+  - New effect types: `lender_addition` (lender appears) and `lender_removal` (lender exits)
+  - Eliminates artificial interaction effects caused by missing lenders
+  - Multi-lender analysis gracefully handles lenders present in only one period
+
+#### Improvements
+- ✅ **Enhanced Waterfall Chart Y-Axis Scaling**: Charts now properly scale based on all waterfall points, not just start/end
+  - Fixes display issues when start/end are similar but intermediate effects are large
+  - Ensures all effects are clearly visible with appropriate buffer space
+- ✅ **Cleaner Waterfall Charts**: Interaction effect removed from charts (still calculated but not displayed)
+  - Interaction effects are typically very small (< 0.01%) with new lender tracking
+  - Charts focus on meaningful operational and structural effects
+- ✅ **Improved Multi-Lender Reconciliation**: Perfect reconciliation maintained even with missing lenders
+- ✅ **Better User Warnings**: Clear warnings when lenders are missing from periods
+
+#### Bug Fixes
+- ✅ Fixed waterfall connector lines ending below End bar when zero-impact effects present
+- ✅ Fixed cumulative tracking in multi-lender charts
+- ✅ Resolved interaction effect aggregation in multi-lender summaries
+
+### Previous Release (v2.0.0)
 
 #### New Features
 - ✅ Flexible `date_column` parameter for weekly/custom time granularities
@@ -492,6 +516,6 @@ For questions, issues, or feature requests:
 
 ---
 
-**Package Version:** 2.0.0
+**Package Version:** 2.1.0
 **Last Updated:** November 2024
 **Python Version:** 3.8+
