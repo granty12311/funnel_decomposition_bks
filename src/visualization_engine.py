@@ -14,8 +14,10 @@ from typing import Union, Optional, List
 
 try:
     from .utils import format_date_label, format_number, format_percentage
+    from .dimension_config import apply_dimension_order
 except ImportError:
     from utils import format_date_label, format_number, format_percentage
+    from dimension_config import apply_dimension_order
 
 
 # Color palette
@@ -35,15 +37,20 @@ def create_waterfall_grid(
     Create grid of waterfall charts showing booking decomposition.
 
     Creates a 2x2 grid:
-    - [0, 0]: Overall aggregate waterfall (all effects as aggregate)
-    - [0, 1]: By FICO band (volume aggregate, other effects by FICO)
-    - [1, 0]: By offer comp tier (volume aggregate, other effects by tier)
-    - [1, 1]: By product line (volume aggregate, other effects by product)
+    - [0, 0]: Overall aggregate waterfall (volume and mix shown separately)
+    - [0, 1]: By FICO band (volume+mix combined and stacked by FICO)
+    - [1, 0]: By offer comp tier (volume+mix combined and stacked by tier)
+    - [1, 1]: By product line (volume+mix combined and stacked by product)
 
-    Note: In dimensional charts, volume effect is shown as a single aggregate bar
-    (green/red based on sign) because volume is a lender-level metric independent
-    of dimensional mix. Other effects (mix, approval rates, booking rates) are
-    shown stacked by dimension to show each dimension's contribution.
+    Note on Volume + Mix Combination:
+    In dimensional charts ([0,1], [1,0], [1,1]), volume and mix effects are combined
+    into a single "Volume + Mix" effect stacked by dimension. This shows the net
+    segment volume impact, since segment-level volume change = total_volume × mix.
+    This approach provides clearer attribution of how each dimensional segment
+    contributes to overall booking changes through volume shifts.
+
+    The aggregate chart ([0,0]) continues to show volume and mix as separate effects
+    for traditional waterfall presentation.
 
     Parameters
     ----------
@@ -280,33 +287,35 @@ def _create_dimensional_waterfall(
     period_2_bks: float,
     title: str
 ) -> pd.DataFrame:
-    """Create dimensional waterfall chart with aggregate volume and stacked dimensional effects.
+    """Create dimensional waterfall chart with combined volume+mix and other stacked effects.
 
-    Volume effect is shown as a single aggregate bar, while other effects are broken down
-    by the specified dimension using stacked bars. This approach clarifies that volume
-    is a lender-level metric independent of dimensional mix.
+    Volume and mix effects are combined into a single 'Volume + Mix' effect to show
+    net segment volume impact, since segment-level volume change = total_volume × mix.
+    This combined effect is stacked by dimension along with approval and booking rate effects,
+    providing clearer attribution of dimensional contributions to booking changes.
 
     Returns DataFrame with breakdown details for display below chart.
     """
 
-    # Aggregate effects by dimension (excluding volume for separate treatment)
-    dim_agg, volume_total = _aggregate_by_dimension(segment_detail, dimension, exclude_volume=True)
+    # Aggregate effects by dimension with volume and mix combined
+    dim_agg = _aggregate_by_dimension(segment_detail, dimension, combine_volume_mix=True)
 
-    # Get effect types (excluding total_change, volume_effect, and interaction_effect)
-    # Volume will be plotted separately as aggregate
+    # Get effect types from the aggregated data (excluding total_change and interaction_effect)
+    # Now includes volume_mix_effect as a dimensional effect
     # Interaction effect is typically very small and not shown in charts
-    effects_dimensional = summary[
-        (summary['effect_type'] != 'total_change') &
-        (summary['effect_type'] != 'interaction_effect') &
-        (summary['effect_type'] != 'volume_effect')
-    ]['effect_type'].tolist()
+    effects_dimensional = dim_agg['effect_type'].unique().tolist()
+    # Ensure consistent ordering
+    effect_order = ['volume_mix_effect', 'str_approval_effect', 'cond_approval_effect',
+                   'str_booking_effect', 'cond_booking_effect']
+    effects_dimensional = [e for e in effect_order if e in effects_dimensional]
 
-    # Prepare data - includes volume as separate aggregate effect
-    labels = ['Start', 'Volume'] + effects_dimensional + ['End']
+    # Prepare data - all effects are dimensional (stacked by dimension)
+    labels = ['Start'] + effects_dimensional + ['End']
     x_pos = np.arange(len(labels))
 
-    # Get unique dimension values
-    dim_values = sorted(segment_detail[dimension].unique())
+    # Get unique dimension values and apply configured ordering
+    dim_values_unsorted = segment_detail[dimension].unique().tolist()
+    dim_values = apply_dimension_order(dimension, dim_values_unsorted)
 
     # Color scheme: shades of green for positives, shades of red for negatives
     # Create gradients for each dimension value
@@ -318,12 +327,7 @@ def _create_dimensional_waterfall(
     all_values = [period_1_bks, period_2_bks]
     temp_cumulative = period_1_bks
 
-    # Add volume effect (aggregate, not by dimension)
-    all_values.append(temp_cumulative)
-    temp_cumulative += volume_total
-    all_values.append(temp_cumulative)
-
-    # Add dimensional effects
+    # Add all dimensional effects (including combined volume+mix)
     for effect in effects_dimensional:
         effect_data = dim_agg[dim_agg['effect_type'] == effect]
         total_effect = effect_data['impact'].sum()
@@ -373,46 +377,9 @@ def _create_dimensional_waterfall(
     # Track cumulative position for connectors
     cumulative = period_1_bks
 
-    # Plot Volume effect as single aggregate bar (position 1)
-    volume_x = 1
-    if abs(volume_total) < 0.01:
-        # Zero volume - draw connector and marker
-        ax.plot([volume_x-1+0.3, volume_x-0.3], [cumulative, cumulative],
-               color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
-        ax.plot(volume_x, cumulative, marker='o', markersize=6, color=COLOR_CONNECTOR,
-               markeredgecolor='black', markeredgewidth=1.5, zorder=3)
-        ax.text(volume_x, cumulative - label_offset, '+0',
-               ha='center', va='top', fontsize=10, fontweight='bold',
-               bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
-                        edgecolor='black', linewidth=1.5, alpha=0.95))
-    else:
-        # Non-zero volume - draw aggregate bar
-        color = COLOR_POSITIVE if volume_total >= 0 else COLOR_NEGATIVE
-        bottom = cumulative if volume_total >= 0 else cumulative + volume_total
-        height = abs(volume_total)
-
-        rect = Rectangle((volume_x - 0.3, bottom), 0.6, height,
-                       facecolor=color, edgecolor='black', linewidth=1.5, alpha=0.9)
-        ax.add_patch(rect)
-
-        # Value label
-        label_y_pos = min(cumulative, cumulative + volume_total)
-        sign = '+' if volume_total >= 0 else ''
-        ax.text(volume_x, label_y_pos - label_offset, f'{sign}{format_number(volume_total, 0)}',
-               ha='center', va='top', fontsize=10, fontweight='bold',
-               bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
-                        edgecolor='black', linewidth=1.5, alpha=0.95))
-
-        # Connector from Start to Volume
-        ax.plot([volume_x-1+0.3, volume_x-0.3], [cumulative, cumulative],
-               color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
-
-    # Update cumulative after volume
-    cumulative += volume_total
-
-    # Plot each dimensional effect as diverging stacked bar
+    # Plot each dimensional effect as diverging stacked bar (including combined volume+mix)
     for i, effect in enumerate(effects_dimensional):
-        x = i + 2  # Offset by 2 to account for Start and Volume bars
+        x = i + 1  # Offset by 1 to account for Start bar
 
         # Get values for this effect by dimension
         effect_data = dim_agg[dim_agg['effect_type'] == effect]
@@ -533,7 +500,7 @@ def _create_dimensional_waterfall(
     ax.grid(axis='y', alpha=0.3, linestyle='--')
     ax.axhline(y=0, color='black', linewidth=0.8)
 
-    # Enhanced legend showing dimensional breakdown (volume shown as aggregate bar, not in legend)
+    # Enhanced legend showing dimensional breakdown for all effects (including volume+mix)
     legend_elements = []
 
     # Add dimension-specific green shades (positive)
@@ -560,7 +527,8 @@ def _create_dimensional_waterfall(
 def _aggregate_by_dimension(
     segment_detail: pd.DataFrame,
     dimension: str,
-    exclude_volume: bool = False
+    exclude_volume: bool = False,
+    combine_volume_mix: bool = False
 ) -> Union[pd.DataFrame, tuple]:
     """
     Aggregate effects by dimension.
@@ -574,6 +542,10 @@ def _aggregate_by_dimension(
     exclude_volume : bool, optional
         If True, excludes volume_effect from dimensional aggregation and returns it separately.
         Default is False for backward compatibility.
+    combine_volume_mix : bool, optional
+        If True, combines volume_effect and mix_effect into a single 'volume_mix_effect'
+        to show net segment volume impact (segment volume = total volume × mix).
+        Default is False for backward compatibility.
 
     Returns
     -------
@@ -581,15 +553,30 @@ def _aggregate_by_dimension(
         If exclude_volume=False: DataFrame with aggregated effects by dimension
         If exclude_volume=True: Tuple of (DataFrame with effects by dimension, float volume_total)
     """
-    effect_cols = [
-        'volume_effect', 'mix_effect', 'str_approval_effect',
-        'cond_approval_effect', 'str_booking_effect', 'cond_booking_effect'
-    ]
+    # Make a copy if we need to add combined columns
+    if combine_volume_mix:
+        segment_detail = segment_detail.copy()
+        # Combine volume and mix at segment level for net segment volume impact
+        segment_detail['volume_mix_effect'] = (
+            segment_detail['volume_effect'] + segment_detail['mix_effect']
+        )
+        effect_cols = [
+            'volume_mix_effect',  # Combined effect showing net segment volume
+            'str_approval_effect',
+            'cond_approval_effect',
+            'str_booking_effect',
+            'cond_booking_effect'
+        ]
+    else:
+        effect_cols = [
+            'volume_effect', 'mix_effect', 'str_approval_effect',
+            'cond_approval_effect', 'str_booking_effect', 'cond_booking_effect'
+        ]
 
-    # Calculate volume total if excluding
-    if exclude_volume:
-        volume_total = segment_detail['volume_effect'].sum()
-        effect_cols = [e for e in effect_cols if e != 'volume_effect']
+        # Calculate volume total if excluding
+        if exclude_volume:
+            volume_total = segment_detail['volume_effect'].sum()
+            effect_cols = [e for e in effect_cols if e != 'volume_effect']
 
     results = []
     for effect in effect_cols:
@@ -600,7 +587,7 @@ def _aggregate_by_dimension(
 
     aggregated = pd.concat(results, ignore_index=True)
 
-    if exclude_volume:
+    if exclude_volume and not combine_volume_mix:
         return aggregated, volume_total
     else:
         return aggregated
@@ -613,6 +600,7 @@ def _format_effect_labels(labels: List[str]) -> List[str]:
         'End': 'End',
         'volume_effect': 'Volume',
         'mix_effect': 'Mix',
+        'volume_mix_effect': 'Volume + Mix',
         'str_approval_effect': 'Str Apprv',
         'cond_approval_effect': 'Cond Apprv',
         'str_booking_effect': 'Str Book',
@@ -675,9 +663,10 @@ def create_dimension_drilldown(
     """
     Create bar charts showing effect breakdown by a specific dimension.
 
-    Note: Volume effect is EXCLUDED from this drilldown because it is a lender-level
-    aggregate metric independent of dimensional mix. Only dimensional effects (mix,
-    approval rates, booking rates) are shown. Total Net Impact excludes volume effect.
+    Volume and mix effects are combined to show net segment volume impact, since
+    segment-level volume change = total_volume × mix_percentage. This provides a
+    clearer view of dimensional contributions to booking changes. Total Net Impact
+    now includes all effects including volume.
 
     Parameters
     ----------
@@ -699,9 +688,6 @@ def create_dimension_drilldown(
     date_a = segment_detail['period_1_date'].iloc[0]
     date_b = segment_detail['period_2_date'].iloc[0]
 
-    # Calculate volume effect as aggregate (lender-level, not by dimension)
-    volume_total = segment_detail['volume_effect'].sum()
-
     # Aggregate effects by dimension
     dim_agg = segment_detail.groupby(dimension).agg({
         'total_effect': 'sum',
@@ -713,8 +699,12 @@ def create_dimension_drilldown(
         'cond_booking_effect': 'sum'
     }).reset_index()
 
-    # Calculate total effect excluding volume (volume is aggregate, not dimensional)
-    dim_agg['total_effect_excl_volume'] = dim_agg['total_effect'] - dim_agg['volume_effect']
+    # Combine volume and mix for net segment volume impact
+    # Segment volume = total volume × mix, so combining shows true dimensional volume contribution
+    dim_agg['volume_mix_effect'] = dim_agg['volume_effect'] + dim_agg['mix_effect']
+
+    # Total net impact now includes all effects (including volume)
+    dim_agg['total_net_impact'] = dim_agg['total_effect']
 
     # Create figure with 6 panels (2 cols × 3 rows)
     fig, axes = plt.subplots(3, 2, figsize=(14, 12))
@@ -725,22 +715,30 @@ def create_dimension_drilldown(
     )
 
     effects = [
-        ('total_effect_excl_volume', 'Total Net Impact (Excl. Volume)', True),  # By dimension, volume excluded
-        ('mix_effect', 'Mix Effect', True),  # By dimension
+        ('total_net_impact', 'Total Net Impact', True),  # By dimension, includes all effects
+        ('volume_mix_effect', 'Volume + Mix Effect', True),  # Combined effect by dimension
         ('str_approval_effect', 'Straight Approval Effect', True),  # By dimension
         ('cond_approval_effect', 'Conditional Approval Effect', True),  # By dimension
         ('str_booking_effect', 'Straight Booking Effect', True),  # By dimension
         ('cond_booking_effect', 'Conditional Booking Effect', True)  # By dimension
     ]
 
-    # Plot each effect (all by dimension, volume excluded)
+    # Plot each effect (all by dimension, volume combined with mix)
     for idx, (effect_col, title, by_dimension) in enumerate(effects):
         row = idx // 2
         col = idx % 2
         ax = axes[row, col]
 
-        # Get data
-        data = dim_agg[[dimension, effect_col]].sort_values(effect_col, ascending=False)
+        # Get data and apply configured dimension ordering
+        data = dim_agg[[dimension, effect_col]].copy()
+
+        # Apply dimension ordering from config (instead of sorting by impact value)
+        dim_values = data[dimension].unique().tolist()
+        ordered_dims = apply_dimension_order(dimension, dim_values)
+
+        # Reorder data according to configured ordering
+        data[dimension] = pd.Categorical(data[dimension], categories=ordered_dims, ordered=True)
+        data = data.sort_values(dimension)
 
         # Colors based on positive/negative
         colors = [COLOR_POSITIVE if val >= 0 else COLOR_NEGATIVE
@@ -1095,9 +1093,16 @@ def create_lender_drilldown(
     for idx, effect_type in enumerate(effects_to_plot):
         ax = axes[idx]
 
-        # Get data for this effect
+        # Get data for this effect and apply configured lender ordering
         effect_data = lender_summaries[lender_summaries['effect_type'] == effect_type].copy()
-        effect_data = effect_data.sort_values('booking_impact', ascending=True)
+
+        # Apply lender ordering from config (instead of sorting by impact value)
+        lenders = effect_data['lender'].unique().tolist()
+        ordered_lenders = apply_dimension_order('lender', lenders)
+
+        # Reorder data according to configured ordering
+        effect_data['lender'] = pd.Categorical(effect_data['lender'], categories=ordered_lenders, ordered=True)
+        effect_data = effect_data.sort_values('lender')
 
         # Separate positive and negative
         positive = effect_data[effect_data['booking_impact'] > 0]
@@ -1247,7 +1252,10 @@ def create_lender_waterfall_grid(
     date_b = metadata['date_b']
     period_1_bks = metadata['aggregate_period_1_bookings']
     period_2_bks = metadata['aggregate_period_2_bookings']
+
+    # Apply configured lender ordering
     lenders = metadata['lenders']
+    lenders = apply_dimension_order('lender', lenders)
 
     # Main title
     fig.suptitle(f'Multi-Lender Booking Decomposition: {date_a} → {date_b}',
