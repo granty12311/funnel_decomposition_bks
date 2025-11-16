@@ -14,10 +14,10 @@ from typing import Union, Optional, List
 
 try:
     from .utils import format_date_label, format_number, format_percentage
-    from .dimension_config import apply_dimension_order
+    from .dimension_config import apply_dimension_order, get_dimension_columns
 except ImportError:
     from utils import format_date_label, format_number, format_percentage
-    from dimension_config import apply_dimension_order
+    from dimension_config import apply_dimension_order, get_dimension_columns
 
 
 # Color palette
@@ -90,45 +90,36 @@ def create_waterfall_grid(
         title='Overall Aggregate'
     )
 
-    # Chart 2: By FICO band (top-right)
-    fico_breakdown = _create_dimensional_waterfall(
-        ax=axes[0, 1],
-        summary=summary,
-        segment_detail=segment_detail,
-        dimension='fico_bands',
-        period_1_bks=period_1_bks,
-        period_2_bks=period_2_bks,
-        title='By FICO Band'
-    )
+    # Get dynamic dimension column names
+    dimension_cols = get_dimension_columns()
+    num_dimensions = len(dimension_cols)
 
-    # Chart 3: By offer comp tier (bottom-left)
-    comp_breakdown = _create_dimensional_waterfall(
-        ax=axes[1, 0],
-        summary=summary,
-        segment_detail=segment_detail,
-        dimension='offer_comp_tier',
-        period_1_bks=period_1_bks,
-        period_2_bks=period_2_bks,
-        title='By Offer Comp Tier'
-    )
+    # Create dimensional charts based on number of dimensions
+    dimension_breakdowns = {}
 
-    # Chart 4: By product line (bottom-right)
-    prod_breakdown = _create_dimensional_waterfall(
-        ax=axes[1, 1],
-        summary=summary,
-        segment_detail=segment_detail,
-        dimension='prod_line',
-        period_1_bks=period_1_bks,
-        period_2_bks=period_2_bks,
-        title='By Product Line'
-    )
+    # Chart positions for up to 3 dimensions: top-right, bottom-left, bottom-right
+    chart_positions = [(0, 1), (1, 0), (1, 1)]
+
+    for i, dim_col in enumerate(dimension_cols[:3]):  # Support up to 3 dimensions
+        if i < len(chart_positions):
+            breakdown = _create_dimensional_waterfall(
+                ax=axes[chart_positions[i]],
+                summary=summary,
+                segment_detail=segment_detail,
+                dimension=dim_col,
+                period_1_bks=period_1_bks,
+                period_2_bks=period_2_bks,
+                title=f'By {_format_dimension_name(dim_col)}'
+            )
+            dimension_breakdowns[dim_col] = breakdown
+
+    # Hide unused subplots if fewer than 3 dimensions
+    if num_dimensions < 3:
+        for i in range(num_dimensions, 3):
+            axes[chart_positions[i]].set_visible(False)
 
     # Store breakdowns in figure metadata for optional display
-    fig.breakdown_details = {
-        'fico_bands': fico_breakdown,
-        'offer_comp_tier': comp_breakdown,
-        'prod_line': prod_breakdown
-    }
+    fig.breakdown_details = dimension_breakdowns
 
     plt.tight_layout()
 
@@ -517,7 +508,7 @@ def _create_dimensional_waterfall(
     # Using 0.05 (5%) from bottom to ensure no overlap with value labels
     ax.legend(handles=legend_elements, loc='lower center', bbox_to_anchor=(0.5, 0.05),
              fontsize=8, framealpha=0.95, edgecolor='black',
-             title=dimension.replace('_', ' ').title(),
+             title=_format_dimension_name(dimension),
              ncol=len(dim_values))
 
     # Return breakdown details as DataFrame
@@ -591,6 +582,18 @@ def _aggregate_by_dimension(
         return aggregated, volume_total
     else:
         return aggregated
+
+
+def _format_dimension_name(dim_name: str) -> str:
+    """
+    Format dimension column name for display in chart titles.
+
+    Converts column names like 'fico_bands' or 'credit_score_band' to
+    readable titles like 'FICO Bands' or 'Credit Score Band'.
+    """
+    # Replace underscores with spaces and title case
+    formatted = dim_name.replace('_', ' ').title()
+    return formatted
 
 
 def _format_effect_labels(labels: List[str]) -> List[str]:
@@ -709,7 +712,7 @@ def create_dimension_drilldown(
     # Create figure with 6 panels (2 cols × 3 rows)
     fig, axes = plt.subplots(3, 2, figsize=(14, 12))
     fig.suptitle(
-        f'{lender} Booking Impact Decomposition by {dimension.replace("_", " ").title()}\n'
+        f'{lender} Booking Impact Decomposition by {_format_dimension_name(dimension)}\n'
         f'{date_a} → {date_b}',
         fontsize=14, fontweight='bold', y=0.98
     )

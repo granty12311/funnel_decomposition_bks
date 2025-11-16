@@ -18,6 +18,7 @@ try:
         calculate_segment_bookings,
         validate_period_data
     )
+    from .dimension_config import get_dimension_columns
 except ImportError:
     from utils import (
         validate_dataframe,
@@ -25,6 +26,7 @@ except ImportError:
         calculate_segment_bookings,
         validate_period_data
     )
+    from dimension_config import get_dimension_columns
 
 
 class DecompositionResults(NamedTuple):
@@ -157,8 +159,8 @@ def _calculate_all_effects(
     pd.DataFrame
         Segment-level detail with all effects
     """
-    # Merge periods on segment identifiers
-    merge_cols = ['fico_bands', 'offer_comp_tier', 'prod_line']
+    # Merge periods on segment identifiers (dynamic dimension columns from config)
+    merge_cols = get_dimension_columns()
 
     df_merged = df_1[merge_cols + [
         'num_tot_apps', 'pct_of_total_apps', 'segment_apps',
@@ -250,10 +252,11 @@ def _calculate_all_effects(
     df_merged['period_1_date'] = str(date_a.date())
     df_merged['period_2_date'] = str(date_b.date())
 
-    # Reorder columns
+    # Reorder columns - dimension columns come first
+    dimension_cols = get_dimension_columns()
     col_order = [
-        # Identifiers
-        'fico_bands', 'offer_comp_tier', 'prod_line',
+        # Identifiers (dynamic dimension columns)
+        *dimension_cols,
 
         # Period 1
         'period_1_date', 'period_1_total_apps', 'period_1_pct_of_total',
@@ -666,7 +669,8 @@ def _calculate_decomposition_with_missing_period(
 
     # Create simplified segment detail (minimal information)
     # Use the real period's segments as template
-    segment_detail = df_real[['fico_bands', 'offer_comp_tier', 'prod_line']].copy()
+    dimension_cols = get_dimension_columns()
+    segment_detail = df_real[dimension_cols].copy()
 
     # Add period information
     segment_detail['period_1_date'] = str(date_a.date())

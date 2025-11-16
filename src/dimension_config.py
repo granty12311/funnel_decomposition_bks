@@ -39,24 +39,36 @@ DIMENSION_ORDER = {
         'FINTECH_CO'
     ],
 
-    # FICO band ordering (high to low)
+    # Credit score band ordering (using alternative column name)
     # Includes both standard and alternative naming conventions
-    'fico_bands': [
+    'credit_score_band': [
         # Standard FICO bands
         'High_FICO',
         'Medium_FICO',
         'Low_FICO',
         'Null_FICO',
-        # Alternative FICO bands (descriptive names)
+        # Alternative credit score bands (descriptive names)
         'Excellent',
         'Good',
         'Fair',
         'Poor'
     ],
 
-    # Offer competitiveness tier ordering
+    # Legacy support - still include old name for backward compatibility
+    'fico_bands': [
+        'High_FICO',
+        'Medium_FICO',
+        'Low_FICO',
+        'Null_FICO',
+        'Excellent',
+        'Good',
+        'Fair',
+        'Poor'
+    ],
+
+    # Competitiveness tier ordering (using alternative column name)
     # Includes both standard and alternative naming conventions
-    'offer_comp_tier': [
+    'competitiveness_tier': [
         # Standard comp tiers
         'solo_offer',
         'multi_best',
@@ -67,13 +79,31 @@ DIMENSION_ORDER = {
         'standard'
     ],
 
-    # Product line ordering
+    # Legacy support - still include old name
+    'offer_comp_tier': [
+        'solo_offer',
+        'multi_best',
+        'multi_other',
+        'exclusive',
+        'competitive',
+        'standard'
+    ],
+
+    # Product type ordering (using alternative column name)
     # Includes both standard and alternative naming conventions
-    'prod_line': [
+    'product_type': [
         # Standard product lines
         'used',
         'vmax',
-        # Alternative product lines (descriptive names)
+        # Alternative product types (descriptive names)
+        'auto_loan',
+        'personal_loan'
+    ],
+
+    # Legacy support - still include old name
+    'prod_line': [
+        'used',
+        'vmax',
         'auto_loan',
         'personal_loan'
     ]
@@ -81,18 +111,53 @@ DIMENSION_ORDER = {
 
 
 # ============================================================================
-# ACTIVE DIMENSIONS
+# DIMENSION COLUMN NAMES
 # ============================================================================
 
-# Dimensions to use for visualization breakdowns (up to 3)
-# These should match the columns in your data that you want to analyze
-ACTIVE_DIMENSIONS = [
-    'fico_bands',
-    'offer_comp_tier',
-    'prod_line'
+# Define the actual column names used in your data for each dimension.
+# These column names will be used throughout the codebase for calculations,
+# validations, and visualizations.
+#
+# To use alternative column names, simply change these values:
+#   Example: DIMENSION_COLUMNS = ['credit_score', 'competitiveness', 'product']
+#
+# The system will automatically use these names everywhere.
+
+DIMENSION_COLUMNS = [
+    'credit_score_band',     # Credit score dimension
+    'competitiveness_tier',  # Competitiveness dimension
+    'product_type'           # Product line dimension
 ]
 
+# ALTERNATIVE: Use standard names (comment out above and uncomment below to revert)
+# DIMENSION_COLUMNS = [
+#     'fico_bands',        # Credit score dimension
+#     'offer_comp_tier',   # Competitiveness dimension
+#     'prod_line'          # Product line dimension
+# ]
+
+# Legacy support: Individual dimension name getters
+# These map to the DIMENSION_COLUMNS list for backward compatibility
+def get_fico_dimension_name():
+    """Get the column name for the FICO/credit score dimension."""
+    return DIMENSION_COLUMNS[0]
+
+def get_comp_dimension_name():
+    """Get the column name for the competitiveness dimension."""
+    return DIMENSION_COLUMNS[1]
+
+def get_product_dimension_name():
+    """Get the column name for the product dimension."""
+    return DIMENSION_COLUMNS[2]
+
 # Note: 'lender' dimension is handled separately in multi-lender visualizations
+
+# ============================================================================
+# ACTIVE DIMENSIONS (DEPRECATED - use DIMENSION_COLUMNS instead)
+# ============================================================================
+
+# For backward compatibility - returns the same as DIMENSION_COLUMNS
+ACTIVE_DIMENSIONS = DIMENSION_COLUMNS
 
 
 # ============================================================================
@@ -165,14 +230,26 @@ def apply_dimension_order(dimension: str, values: list) -> list:
 
 def get_active_dimensions() -> list:
     """
-    Get the list of active dimensions for visualization breakdowns.
+    Get the list of active dimension column names.
 
     Returns
     -------
     list
-        List of dimension names to use for breakdowns
+        List of dimension column names to use for breakdowns
     """
-    return ACTIVE_DIMENSIONS.copy()
+    return DIMENSION_COLUMNS.copy()
+
+
+def get_dimension_columns() -> list:
+    """
+    Get the list of dimension column names.
+
+    Returns
+    -------
+    list
+        List of dimension column names [fico, comp, product]
+    """
+    return DIMENSION_COLUMNS.copy()
 
 
 # ============================================================================
