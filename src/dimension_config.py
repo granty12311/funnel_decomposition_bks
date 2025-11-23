@@ -123,17 +123,18 @@ DIMENSION_ORDER = {
 #
 # The system will automatically use these names everywhere.
 
+# Use standard names for compatibility with demo data
 DIMENSION_COLUMNS = [
-    'credit_score_band',     # Credit score dimension
-    'competitiveness_tier',  # Competitiveness dimension
-    'product_type'           # Product line dimension
+    'fico_bands',        # Credit score dimension
+    'offer_comp_tier',   # Competitiveness dimension
+    'prod_line'          # Product line dimension
 ]
 
-# ALTERNATIVE: Use standard names (comment out above and uncomment below to revert)
+# ALTERNATIVE: Use alternative names (comment out above and uncomment below to change)
 # DIMENSION_COLUMNS = [
-#     'fico_bands',        # Credit score dimension
-#     'offer_comp_tier',   # Competitiveness dimension
-#     'prod_line'          # Product line dimension
+#     'credit_score_band',     # Credit score dimension
+#     'competitiveness_tier',  # Competitiveness dimension
+#     'product_type'           # Product line dimension
 # ]
 
 # Legacy support: Individual dimension name getters
