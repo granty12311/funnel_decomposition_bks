@@ -6,6 +6,11 @@ Defines dimension ordering and column names for:
 - offer_comp_tier: Offer competitiveness tier
 """
 
+# Non-financed lender identifier
+# Used to represent bookings from customers who pay cash (no lender financing)
+# These rows only have num_tot_bks populated and are excluded from funnel decomposition
+NON_FINANCED_LENDER = 'NON_FINANCED'
+
 # Dimension value ordering
 DIMENSION_ORDER = {
     'lender': ['ACA', 'ALY', 'CAP'],

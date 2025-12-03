@@ -1,521 +1,333 @@
-# Funnel Decomposition Analysis Package
+# LMDI Funnel Decomposition Package
 
-A comprehensive Python package for analyzing booking funnel changes using multiple decomposition methodologies. Decompose booking changes into interpretable effects including volume, mix, approval rates, and booking rates across multiple dimensions.
+A Python package for analyzing booking funnel changes using LMDI (Logarithmic Mean Divisia Index) decomposition methodology. Decomposes booking changes into interpretable driver effects and provides penetration analysis for market share insights.
 
 ## Features
 
-### 🔄 Multiple Decomposition Methodologies
+### LMDI Decomposition
 
-1. **Symmetric Decomposition** (Order-Independent)
-   - Uses midpoint methodology with average values from both periods
-   - Order-independent: results don't depend on effect calculation sequence
-   - Balanced view with no bias toward either period
-   - Includes interaction effect for perfect reconciliation
+Implements the LMDI methodology with split mix effects for precise attribution:
 
-2. **Hierarchical Decomposition** (Sequential Waterfall)
-   - Sequential waterfall where each effect builds on previous steps
-   - Intuitive step-by-step transformation logic
-   - Traditional approach familiar to business users
-   - Perfect reconciliation without residual
+- **Volume Effect**: Total application volume change
+- **Customer Mix Effect**: Customer segment distribution change (marginal mix)
+- **Offer Comp Mix Effect**: Offer competitiveness distribution change (conditional mix)
+- **Straight Approval Effect**: Change in straight approval rates
+- **Conditional Approval Effect**: Change in conditional approval rates
+- **Straight Booking Effect**: Change in straight booking rates
+- **Conditional Booking Effect**: Change in conditional booking rates
 
-### 📊 Six Core Effects
+**Key Benefits**:
+- Perfect reconciliation (effects sum exactly to actual change)
+- Order-independent decomposition
+- Split mix effects for granular insight into customer vs. offer dynamics
 
-All methodologies decompose booking changes into:
+### Penetration Analysis
 
-1. **Volume Effect**: Change in total application volume
-2. **Mix Effect**: Change in segment distribution (dimensional mix)
-3. **Straight Approval Effect**: Change in straight approval rates
-4. **Conditional Approval Effect**: Change in conditional approval rates
-5. **Straight Booking Effect**: Change in straight booking rates (given straight approval)
-6. **Conditional Booking Effect**: Change in conditional booking rates (given conditional approval)
+Analyzes market share (lender bookings / total market bookings) with decomposed effects:
 
-### 🎯 Advanced Capabilities
+- **Gross Lender Effects**: Numerator impact (7 effects)
+- **Self-Adjustment**: Lender's contribution to denominator growth
+- **Net Lender Effects**: Gross minus self-adjustment
+- **Competitor Effects**: Rest of market impact
+- **Net Effects**: Net lender + competitor for each driver
 
-- **Multi-Lender Analysis**: Aggregate and lender-attributed decomposition with automatic lender addition/removal tracking
-- **Structural Change Tracking**: Separate effects for lender additions and exits (eliminates artificial interaction effects)
-- **Weekly/Monthly Granularity**: Flexible `date_column` parameter for any time frequency
-- **Dimensional Breakdowns**: Analyze by FICO bands, offer competition tier, product line
-- **Segment-Level Detail**: Deep-dive into specific dimension combinations
-- **Perfect Reconciliation**: All methods guarantee exact reconciliation to actual booking changes
+All outputs in basis points (bps). 100 bps = 1 percentage point.
 
-### 📈 Rich Visualizations
+### Non-Financed Accounts Support
 
-Shared visualization engine across all methodologies:
+Handles cash buyers who don't use lender financing:
+- `NON_FINANCED` rows contribute to total market bookings
+- Excluded from funnel decomposition (no approval/booking rates)
+- Properly included in penetration calculations
 
-- **Waterfall Grids** (2×2 layout): Overall + 3 dimensional breakdowns
-- **Dimensional Stacked Waterfalls**: Effects broken down by dimension values
-- **Dimension Drilldowns**: Horizontal bar charts for detailed analysis
-- **Multi-Lender Comparisons**: Side-by-side aggregate vs by-lender views
-- **Chart Export Utilities**: Extract and export individual charts as PNG
+## Project Structure
+
+```
+funnel_decomposition/
+├── src/
+│   ├── __init__.py
+│   ├── lmdi_decomposition_calculator.py    # Core LMDI decomposition
+│   ├── lmdi_penetration_calculator.py      # Penetration analysis
+│   ├── visualization_engine.py             # Main visualization module
+│   ├── visualization_utils.py              # Chart utilities
+│   ├── visualization_summary.py            # Summary visualizations
+│   ├── visualization_lender.py             # Lender comparison charts
+│   ├── visualization_penetration.py        # Penetration-specific charts
+│   ├── dimension_config.py                 # Dimension ordering config
+│   └── utils.py                            # Shared utilities
+├── notebooks/
+│   ├── lmdi_decomposition_demo.ipynb       # LMDI decomposition demo
+│   ├── lmdi_penetration_demo.ipynb         # Penetration analysis demo
+│   └── summary_demo.ipynb                  # YoY/MoM summary analysis
+└── README.md
+```
 
 ## Installation
 
-### Prerequisites
-
-- Python 3.8 or higher
-- pip package manager
-
-### Setup
-
-1. Clone the repository:
 ```bash
+# Clone the repository
 git clone https://github.com/granty12311/funnel_decomposition_bks.git
 cd funnel_decomposition_bks
-```
 
-2. Install required dependencies:
-```bash
+# Install dependencies
 pip install -r requirements.txt
-```
-
-3. Verify installation:
-```bash
-python -c "import sys; sys.path.insert(0, 'src'); import symmetric_decomposition_calculator; print('Installation successful!')"
 ```
 
 ## Quick Start
 
-### 🚀 Start Here: Comprehensive Demo
-
-The **`funnel_decomposition_demo.ipynb`** notebook provides a complete walkthrough of all package capabilities:
-
-```bash
-jupyter notebook funnel_decomposition_demo.ipynb
-```
-
-This single notebook demonstrates:
-- Symmetric and hierarchical decomposition
-- Weekly analysis with flexible date columns
-- Multi-lender analysis
-- Dimension drilldowns
-- Segment-level detail
-- Side-by-side methodology comparisons
-
-### 📝 Basic Usage Example
+### LMDI Decomposition
 
 ```python
 import sys
-from pathlib import Path
-import pandas as pd
 sys.path.insert(0, 'src')
 
-import symmetric_decomposition_calculator
-import visualization_engine
+import pandas as pd
+from lmdi_decomposition_calculator import calculate_decomposition
 
 # Load your data
 df = pd.read_csv('data/funnel_data.csv')
 df['month_begin_date'] = pd.to_datetime(df['month_begin_date'])
 
-# Calculate symmetric decomposition
-results = symmetric_decomposition_calculator.calculate_decomposition(
+# Calculate decomposition
+results = calculate_decomposition(
     df=df,
     date_a='2023-06-01',
     date_b='2024-06-01',
     lender='ACA'
 )
 
-# View summary
+# View summary (7 effects + total)
 print(results.summary)
 
-# Create visualizations
-fig = visualization_engine.create_waterfall_grid(
-    summary=results.summary,
-    segment_detail=results.segment_detail,
-    lender='ACA'
-)
+# Access segment-level detail
+print(results.segment_detail)
+
+# Metadata with totals
+print(results.metadata)
 ```
 
-## Notebooks
-
-### 🌟 Main Demo
-- **`funnel_decomposition_demo.ipynb`** - Comprehensive demo showcasing all features
-
-### 📋 Method-Specific Templates
-- **`symmetric_funnel_decomp.ipynb`** - Symmetric decomposition template
-- **`hier_funnel_decomp.ipynb`** - Hierarchical decomposition template
-- **`symmetric_funnel_decomp_multi_lender.ipynb`** - Multi-lender analysis template
-- **`symmetric_funnel_decomp_weekly.ipynb`** - Weekly analysis template
-
-## Project Structure
-
-```
-funnel_decomposition_bks/
-├── src/                                    # Core source code
-│   ├── __init__.py
-│   ├── symmetric_decomposition_calculator.py  # Symmetric methodology
-│   ├── hier_decomposition_calculator.py       # Hierarchical methodology
-│   ├── model_decomposition_calculator.py      # Model-based approach
-│   ├── visualization_engine.py                # All chart types
-│   ├── utils.py                              # Shared utilities
-│   └── data_transformation.py                # Data prep utilities
-│
-├── funnel_decomposition_demo.ipynb        # ⭐ START HERE
-├── symmetric_funnel_decomp.ipynb          # Symmetric decomposition template
-├── hier_funnel_decomp.ipynb               # Hierarchical decomposition template
-├── symmetric_funnel_decomp_multi_lender.ipynb  # Multi-lender analysis
-├── symmetric_funnel_decomp_weekly.ipynb   # Weekly analysis template
-└── README.md                             # This file
-```
-
-## Data Requirements
-
-### Input Data Format
-
-Your DataFrame must contain these columns:
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `lender` | str | Lender identifier |
-| `month_begin_date` or custom | datetime | Date identifier (configurable via `date_column`) |
-| `fico_bands` | str | FICO score bands (e.g., 'High_FICO', 'Med_FICO', 'Low_FICO', 'Null_FICO') |
-| `offer_comp_tier` | str | Offer competition tier (e.g., 'solo_offer', 'multi_best', 'multi_other') |
-| `prod_line` | str | Product line (e.g., 'Used', 'VMax') |
-| `num_tot_apps` | int | Total applications for this lender/period |
-| `num_tot_bks` | float | Total bookings for this lender/period |
-| `pct_of_total_apps` | float | Segment's % of total apps (e.g., 0.15 = 15%) |
-| `str_apprv_rate` | float | Straight approval rate (e.g., 0.45 = 45%) |
-| `str_bk_rate` | float | Straight booking rate (e.g., 0.60 = 60%) |
-| `cond_apprv_rate` | float | Conditional approval rate |
-| `cond_bk_rate` | float | Conditional booking rate |
-
-### Data Example
+### Penetration Analysis
 
 ```python
-   lender month_begin_date fico_bands offer_comp_tier prod_line  num_tot_apps  num_tot_bks  pct_of_total_apps  str_apprv_rate  str_bk_rate  cond_apprv_rate  cond_bk_rate
-0    ACA       2023-06-01  High_FICO      multi_best      Used         14573         5092           0.119658        0.505422     0.644748         0.244578      0.293948
-1    ACA       2023-06-01  High_FICO      multi_best      VMax         14573         5092           0.076923        0.556486     0.714620         0.225156      0.238149
-...
-```
+from lmdi_penetration_calculator import calculate_penetration_decomposition
 
-## Key Features in Detail
-
-### 1. Flexible Date Column Support
-
-All calculators support a `date_column` parameter for flexible time granularity:
-
-```python
-# Monthly analysis (default)
-results = calculate_decomposition(
+# Calculate penetration decomposition
+pen_results = calculate_penetration_decomposition(
     df=df,
     date_a='2023-06-01',
     date_b='2024-06-01',
     lender='ACA'
 )
 
-# Weekly analysis
-results = calculate_decomposition(
-    df=df_weekly,
-    date_a=week_1,
-    date_b=week_2,
-    lender='ACA',
-    date_column='week_begin_date'  # Specify date column
-)
+# View summary with gross/net/competitor effects (in bps)
+print(pen_results.summary)
 
-# Custom date column
-results = calculate_decomposition(
-    df=df_custom,
-    date_a='2023-Q2',
-    date_b='2024-Q2',
-    lender='ACA',
-    date_column='quarter_begin_date'
-)
+# Print formatted output
+from lmdi_penetration_calculator import print_penetration_decomposition
+print_penetration_decomposition(pen_results.summary, pen_results.metadata)
 ```
 
-### 2. Multi-Lender Analysis
-
-Analyze multiple lenders simultaneously:
+### Multi-Lender Analysis
 
 ```python
-results = symmetric_decomposition_calculator.calculate_multi_lender_decomposition(
+from lmdi_decomposition_calculator import calculate_multi_lender_decomposition
+
+# Decomposition across all lenders
+multi_results = calculate_multi_lender_decomposition(
     df=df,
     date_a='2023-06-01',
     date_b='2024-06-01'
 )
 
-# View aggregate summary
-print(results.aggregate_summary)
+# Aggregate summary
+print(multi_results.aggregate_summary)
 
-# View lender-attributed summaries
-print(results.lender_summaries)
-
-# Create lender comparison visualizations
-fig = visualization_engine.create_lender_waterfall_grid(
-    lender_summaries=results.lender_summaries,
-    aggregate_summary=results.aggregate_summary,
-    metadata=results.metadata
-)
+# Per-lender summaries
+print(multi_results.lender_summaries)
 ```
 
-### 3. Dimensional Analysis
+## Data Requirements
 
-Create detailed breakdowns by any dimension:
+### Required Columns
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `lender` | str | Lender identifier (e.g., 'ACA', 'ALY', 'CAP') |
+| `month_begin_date` | datetime | Date identifier (configurable via `date_column`) |
+| `customer_segment` | str | Customer credit segment |
+| `offer_comp_tier` | str | Offer competitiveness tier |
+| `num_tot_apps` | int | Total applications for this lender/period |
+| `num_tot_bks` | float | Total bookings for this lender/period |
+| `pct_of_total_apps` | float | Segment's % of total apps (must sum to 1.0) |
+| `str_apprv_rate` | float | Straight approval rate [0, 1] |
+| `str_bk_rate` | float | Straight booking rate [0, 1] |
+| `cond_apprv_rate` | float | Conditional approval rate [0, 1] |
+| `cond_bk_rate` | float | Conditional booking rate [0, 1] |
+
+### Dimension Values
+
+**Customer Segment** (ordered by credit quality):
+- `Super_Prime`
+- `Prime`
+- `Near_Prime`
+- `Subprime`
+- `Deep_Subprime`
+- `New_To_Credit`
+
+**Offer Comp Tier**:
+- `solo_offer`: Only offer presented
+- `multi_best`: Best offer among multiple
+- `multi_other`: Not the best among multiple
+
+### Segment Count
+
+Each lender-period must have exactly 18 segments (6 customer segments × 3 offer comp tiers).
+
+### Non-Financed Rows
+
+For `NON_FINANCED` lender rows:
+- Only `lender`, date column, and `num_tot_bks` are required
+- Other columns can be NaN
+- These rows are included in total market for penetration but excluded from decomposition
+
+## Demo Notebooks
+
+### lmdi_decomposition_demo.ipynb
+Comprehensive demo of LMDI booking decomposition:
+- Single lender analysis
+- 7-effect breakdown with visualizations
+- Segment-level detail exploration
+- Multi-lender comparison
+
+### lmdi_penetration_demo.ipynb
+Penetration (market share) analysis:
+- Gross vs net lender effects
+- Self-adjustment calculation
+- Competitor impact decomposition
+- Penetration waterfall charts
+
+### summary_demo.ipynb
+High-level summary analysis:
+- Year-over-Year (YoY) comparisons
+- Month-over-Month (MoM) analysis
+- Trend visualization
+
+## API Reference
+
+### DecompositionResults
 
 ```python
-# FICO band drilldown
-fig_fico = visualization_engine.create_dimension_drilldown(
-    segment_detail=results.segment_detail,
-    dimension='fico_bands',
-    lender='ACA'
-)
+from lmdi_decomposition_calculator import DecompositionResults
 
-# Offer competition tier drilldown
-fig_comp = visualization_engine.create_dimension_drilldown(
-    segment_detail=results.segment_detail,
-    dimension='offer_comp_tier',
-    lender='ACA'
-)
-
-# Product line drilldown
-fig_prod = visualization_engine.create_dimension_drilldown(
-    segment_detail=results.segment_detail,
-    dimension='prod_line',
-    lender='ACA'
-)
-```
-
-### 4. Chart Export and Saving
-
-Save visualizations directly:
-
-```python
-# Save waterfall grid
-fig = visualization_engine.create_waterfall_grid(
-    summary=results.summary,
-    segment_detail=results.segment_detail,
-    lender='ACA'
-)
-fig.savefig('output/waterfall_grid.png', dpi=300, bbox_inches='tight')
-
-# Save dimension drilldown
-fig_fico = visualization_engine.create_dimension_drilldown(
-    segment_detail=results.segment_detail,
-    dimension='fico_bands',
-    lender='ACA'
-)
-fig_fico.savefig('output/fico_drilldown.png', dpi=300, bbox_inches='tight')
-```
-
-## Results Structure
-
-All decomposition methods return a `DecompositionResults` named tuple:
-
-```python
 results = calculate_decomposition(...)
-
-# Access components
-results.summary              # DataFrame: Aggregate effect impacts
-results.segment_detail       # DataFrame: Segment-level breakdown
-results.metadata            # dict: Calculation metadata
-
-# Summary columns
-# - effect_type: str (e.g., 'volume_effect', 'mix_effect', ...)
-# - booking_impact: float (booking change attributed to this effect)
-
-# Segment detail columns
-# - Dimension identifiers: fico_bands, offer_comp_tier, prod_line
-# - Period 1 metrics: period_1_date, period_1_total_apps, period_1_pct_of_total, ...
-# - Period 2 metrics: period_2_date, period_2_total_apps, period_2_pct_of_total, ...
-# - Delta metrics: delta_total_apps, delta_pct_of_total, delta_str_apprv_rate, ...
-# - Effects: volume_effect, mix_effect, str_approval_effect, cond_approval_effect,
-#           str_booking_effect, cond_booking_effect, total_effect
+results.summary          # DataFrame: 8 rows (7 effects + total)
+results.segment_detail   # DataFrame: 18 rows (segment breakdown)
+results.metadata         # dict: dates, totals, method info
 ```
 
-## Methodology Comparison
+**Summary columns**: `effect_type`, `booking_impact`
 
-### When to Use Symmetric Decomposition
-
-✅ **Best for:**
-- Order-independent results are required
-- Comparing multiple decompositions
-- Academic or research settings
-- Consistent methodology across analyses
-- Balanced view with no period bias
-
-### When to Use Hierarchical Decomposition
-
-✅ **Best for:**
-- Sequential logic matches business process
-- Explaining step-by-step transformations
-- Traditional waterfall approach is preferred
-- Business stakeholders expect incremental impacts
-
-### Key Differences
-
-| Aspect | Symmetric | Hierarchical |
-|--------|-----------|--------------|
-| **Order** | Independent | Dependent |
-| **Base values** | Averages | Period-specific |
-| **Interaction effect** | Yes (residual) | No |
-| **Sequential logic** | No | Yes |
-| **Reconciliation** | Perfect | Perfect |
-
-**Note:** Both methods guarantee perfect reconciliation to actual booking changes.
-
-## Advanced Usage
-
-### Segment-Level Analysis
+### PenetrationResults
 
 ```python
-# Find top 5 segments by impact
-top_segments = results.segment_detail.nlargest(5, 'total_effect')[[
-    'fico_bands', 'offer_comp_tier', 'prod_line', 'total_effect'
-]]
-print(top_segments)
+from lmdi_penetration_calculator import PenetrationResults
 
-# Filter to specific dimension
-high_fico = results.segment_detail[
-    results.segment_detail['fico_bands'] == 'High_FICO'
-]
+results = calculate_penetration_decomposition(...)
+results.summary          # DataFrame: 8 rows with multiple effect columns
+results.segment_detail   # DataFrame: segment-level penetration effects
+results.metadata         # dict: penetration metrics, market totals
 ```
 
-### Export Results
+**Summary columns**:
+- `effect_type`
+- `gross_lender_effect_bps`
+- `self_adjustment_bps`
+- `net_lender_effect_bps`
+- `competitor_effect_bps`
+- `net_effect_bps`
+
+### Key Functions
 
 ```python
-# Export summaries
-results.summary.to_csv('summary.csv', index=False)
-results.segment_detail.to_csv('segment_detail.csv', index=False)
+# Single lender decomposition
+calculate_decomposition(df, date_a, date_b, lender, date_column='month_begin_date')
 
-# Export with metadata
-import json
-with open('metadata.json', 'w') as f:
-    json.dump(results.metadata, f, indent=2)
+# Multi-lender decomposition
+calculate_multi_lender_decomposition(df, date_a, date_b, lenders=None, date_column='month_begin_date')
+
+# Single lender penetration
+calculate_penetration_decomposition(df, date_a, date_b, lender, date_column='month_begin_date')
+
+# Multi-lender penetration
+calculate_multi_lender_penetration_decomposition(df, date_a, date_b, lenders=None, date_column='month_begin_date')
 ```
 
-### Custom Visualizations
+## Methodology
 
-```python
-import matplotlib.pyplot as plt
+### LMDI Decomposition
 
-# Use visualization engine components
-from visualization_engine import _create_aggregate_waterfall
+The LMDI approach uses logarithmic mean weights for exact decomposition:
 
-fig, ax = plt.subplots(figsize=(12, 8))
-_create_aggregate_waterfall(
-    ax=ax,
-    summary=results.summary,
-    lender='ACA'
-)
-plt.tight_layout()
-plt.savefig('custom_waterfall.png', dpi=300, bbox_inches='tight')
+```
+L(x₀, xₜ) = (xₜ - x₀) / ln(xₜ / x₀)
 ```
 
-## Troubleshooting
-
-### Common Issues
-
-**Issue: `ModuleNotFoundError: No module named 'symmetric_decomposition_calculator'`**
-
-Solution:
-```python
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path.cwd() / 'src'))  # Add src to path
+Bookings are decomposed as:
+```
+ΔB = Σᵢ wᵢ × [ln(V₂/V₁) + ln(CS₂/CS₁) + ln(OC₂/OC₁) + ln(rates...)]
 ```
 
-**Issue: `ValueError: No data found for [lender] on [date]`**
+Where:
+- `wᵢ` = logarithmic mean of segment bookings
+- `V` = total applications (volume)
+- `CS` = customer segment share (marginal mix)
+- `OC` = offer comp share (conditional mix)
 
-Solution:
-- Verify date format matches your data
-- Check lender name spelling
-- Ensure date exists in dataset
-- Verify date column name with `date_column` parameter
+### Split Mix Effects
 
-**Issue: `KeyError: 'month_begin_date'`**
+The package implements a hierarchical mix decomposition:
+1. **Customer Mix**: Changes in customer segment distribution (e.g., shift to Prime)
+2. **Offer Comp Mix**: Changes in offer competitiveness within each customer segment
 
-Solution:
-- Use `date_column` parameter to specify your date column name:
-```python
-results = calculate_decomposition(..., date_column='week_begin_date')
-```
+This provides more actionable insights than a single combined mix effect.
 
-**Issue: Waterfall doesn't reconcile**
+### Penetration Self-Adjustment
 
-Solution:
-- Verify all required columns are present
-- Check for NaN values in rate columns
-- Ensure `num_tot_apps` and `num_tot_bks` are consistent
-- Contact support if issue persists (all methods guarantee reconciliation)
+When analyzing penetration (P = L/M):
+- **Gross Effect**: Impact on numerator (lender bookings)
+- **Self-Adjustment**: Lender's contribution to denominator growth
+- **Net Effect**: Gross - Self-Adjustment
+
+This eliminates double-counting when lender growth affects both numerator and denominator.
 
 ## Dependencies
 
-- **pandas** ≥ 2.0.0 - Data manipulation
-- **numpy** ≥ 1.24.0 - Numerical computing
-- **matplotlib** ≥ 3.7.0 - Plotting
-- **seaborn** ≥ 0.12.0 - Statistical visualizations
-- **jupyter** ≥ 1.0.0 - Notebook interface
-- **ipykernel** ≥ 6.25.0 - Jupyter kernel
-- **python-dateutil** ≥ 2.8.0 - Date parsing
-- **openpyxl** ≥ 3.1.0 - Excel I/O (optional)
-
-## Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Add tests if applicable
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+- pandas >= 2.0.0
+- numpy >= 1.24.0
+- matplotlib >= 3.7.0
+- seaborn >= 0.12.0
 
 ## License
 
 This project is proprietary and confidential.
 
-## Support
-
-For questions, issues, or feature requests:
-- Open an issue on GitHub
-- Contact the development team
-- Review the comprehensive demo notebook for usage examples
-
 ## Changelog
 
-### Latest Release (v2.1.0)
+### v3.0.0 (December 2024)
 
-#### New Features
-- ✅ **Lender Addition/Removal Tracking**: Structural lender changes now tracked separately from operational effects
-  - New effect types: `lender_addition` (lender appears) and `lender_removal` (lender exits)
-  - Eliminates artificial interaction effects caused by missing lenders
-  - Multi-lender analysis gracefully handles lenders present in only one period
+**Major Changes**:
+- Replaced symmetric/hierarchical decomposition with LMDI methodology
+- Added penetration analysis with self-adjusted lender effects
+- New dimension structure: customer_segment + offer_comp_tier
+- Added non-financed accounts support
 
-#### Improvements
-- ✅ **Enhanced Waterfall Chart Y-Axis Scaling**: Charts now properly scale based on all waterfall points, not just start/end
-  - Fixes display issues when start/end are similar but intermediate effects are large
-  - Ensures all effects are clearly visible with appropriate buffer space
-- ✅ **Cleaner Waterfall Charts**: Interaction effect removed from charts (still calculated but not displayed)
-  - Interaction effects are typically very small (< 0.01%) with new lender tracking
-  - Charts focus on meaningful operational and structural effects
-- ✅ **Improved Multi-Lender Reconciliation**: Perfect reconciliation maintained even with missing lenders
-- ✅ **Better User Warnings**: Clear warnings when lenders are missing from periods
+**New Features**:
+- 7-effect decomposition with split mix (customer vs offer comp)
+- Penetration decomposition with gross/net/competitor effects
+- Multi-lender analysis for both booking and penetration
+- YoY/MoM summary analysis in demo notebooks
 
-#### Bug Fixes
-- ✅ Fixed waterfall connector lines ending below End bar when zero-impact effects present
-- ✅ Fixed cumulative tracking in multi-lender charts
-- ✅ Resolved interaction effect aggregation in multi-lender summaries
-
-### Previous Release (v2.0.0)
-
-#### New Features
-- ✅ Flexible `date_column` parameter for weekly/custom time granularities
-- ✅ Comprehensive demo notebook combining all methodologies
-- ✅ Chart export utilities with PNG export
-- ✅ Multi-lender analysis with lender attribution
-- ✅ Enhanced visualization engine with dimensional drilldowns
-
-#### Improvements
-- ✅ Cleaned template notebooks (outputs removed)
-- ✅ Updated all calculators with date_column support
-- ✅ Perfect reconciliation validation
-- ✅ Comprehensive documentation
-
-#### Bug Fixes
-- ✅ Fixed date column validation in utils.py
-- ✅ Resolved backward compatibility issues
-
----
-
-**Package Version:** 2.1.0
-**Last Updated:** November 2024
-**Python Version:** 3.8+
+**Improvements**:
+- Perfect reconciliation guaranteed by LMDI methodology
+- Cleaner separation of visualization modules
+- Configurable dimension ordering via dimension_config.py

@@ -16,11 +16,11 @@ from typing import Union, NamedTuple
 from datetime import datetime
 
 try:
-    from .utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data
-    from .dimension_config import get_dimension_columns
+    from .utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data, is_non_financed_lender
+    from .dimension_config import get_dimension_columns, NON_FINANCED_LENDER
 except ImportError:
-    from utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data
-    from dimension_config import get_dimension_columns
+    from utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data, is_non_financed_lender
+    from dimension_config import get_dimension_columns, NON_FINANCED_LENDER
 
 # Dimension hierarchy for split mix calculation
 PRIMARY_DIMENSION = 'customer_segment'
@@ -87,7 +87,13 @@ def calculate_decomposition(
 
     Returns 7 effects: volume, customer_mix, offer_comp_mix,
     str_approval, cond_approval, str_booking, cond_booking.
+
+    Note: NON_FINANCED lender cannot be decomposed (no funnel data).
     """
+    # Validate lender is not NON_FINANCED
+    if is_non_financed_lender(lender):
+        raise ValueError(f"Cannot calculate decomposition for {NON_FINANCED_LENDER} - no funnel data available")
+
     validate_dataframe(df, date_column=date_column)
     date_a, date_b = normalize_date(date_a), normalize_date(date_b)
 
@@ -237,7 +243,10 @@ def calculate_multi_lender_decomposition(
     lenders: list = None,
     date_column: str = 'month_begin_date'
 ) -> MultiLenderResults:
-    """Calculate decomposition across multiple lenders."""
+    """Calculate decomposition across multiple lenders.
+
+    Note: NON_FINANCED is automatically excluded from lender iteration (no funnel data).
+    """
     date_a, date_b = normalize_date(date_a), normalize_date(date_b)
     df = df.copy()
     df[date_column] = pd.to_datetime(df[date_column])
@@ -245,7 +254,8 @@ def calculate_multi_lender_decomposition(
     if lenders is None:
         la = set(df[df[date_column] == date_a]['lender'].unique())
         lb = set(df[df[date_column] == date_b]['lender'].unique())
-        lenders = sorted(la | lb)
+        # Exclude NON_FINANCED from lender iteration
+        lenders = sorted([l for l in (la | lb) if not is_non_financed_lender(l)])
 
     results = {}
     for lender in lenders:

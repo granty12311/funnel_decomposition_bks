@@ -24,12 +24,12 @@ from typing import Union, NamedTuple
 from datetime import datetime
 
 try:
-    from .utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data
-    from .dimension_config import get_dimension_columns
+    from .utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data, is_non_financed_lender, get_financed_lenders
+    from .dimension_config import get_dimension_columns, NON_FINANCED_LENDER
     from .lmdi_decomposition_calculator import logarithmic_mean, safe_log_ratio, PRIMARY_DIMENSION, SECONDARY_DIMENSION
 except ImportError:
-    from utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data
-    from dimension_config import get_dimension_columns
+    from utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data, is_non_financed_lender, get_financed_lenders
+    from dimension_config import get_dimension_columns, NON_FINANCED_LENDER
     from lmdi_decomposition_calculator import logarithmic_mean, safe_log_ratio, PRIMARY_DIMENSION, SECONDARY_DIMENSION
 
 
@@ -62,17 +62,24 @@ def calculate_penetration_decomposition(
     - Gross lender effects capture numerator impact
     - Self-adjustment captures lender's contribution to denominator growth
     - Net lender effects = Gross - Self-adjustment (allocated proportionally)
-    - Competitor effects = pure rest-of-market impact
+    - Competitor effects = pure rest-of-market impact (includes NON_FINANCED)
     - Exact reconciliation: Net Lender + Competitor = Delta Penetration
+
+    Note: Total market includes NON_FINANCED bookings in the denominator for all effects.
+    NON_FINANCED rows contribute to total market but are not decomposed (no funnel data).
 
     Returns DataFrame with columns:
     - effect_type
     - gross_lender_effect_bps (numerator impact)
     - self_adjustment_bps (denominator impact from lender's own growth)
     - net_lender_effect_bps (gross - self-adjustment)
-    - competitor_effect_bps (rest of market impact)
+    - competitor_effect_bps (rest of market impact, includes non-financed)
     - net_effect_bps (net_lender + competitor)
     """
+    # Validate lender is not NON_FINANCED
+    if is_non_financed_lender(lender):
+        raise ValueError(f"Cannot calculate decomposition for {NON_FINANCED_LENDER} - no funnel data available")
+
     validate_dataframe(df, date_column=date_column)
     date_a, date_b = normalize_date(date_a), normalize_date(date_b)
 
@@ -102,10 +109,22 @@ def calculate_penetration_decomposition(
     bks_1, bks_2 = df_1['num_tot_bks'].iloc[0], df_2['num_tot_bks'].iloc[0]
     delta_lender_bks = bks_2 - bks_1
 
-    # Rest of market (competitors only)
+    # Get non-financed bookings (if present in data)
+    nf_data_1 = df[(df['lender'] == NON_FINANCED_LENDER) & (df[date_column] == date_a)]
+    nf_data_2 = df[(df['lender'] == NON_FINANCED_LENDER) & (df[date_column] == date_b)]
+    nf_bks_1 = nf_data_1['num_tot_bks'].iloc[0] if len(nf_data_1) > 0 else 0
+    nf_bks_2 = nf_data_2['num_tot_bks'].iloc[0] if len(nf_data_2) > 0 else 0
+    delta_nf_bks = nf_bks_2 - nf_bks_1
+
+    # Rest of market (all other lenders + non-financed)
     rest_of_market_1 = total_market_1 - bks_1
     rest_of_market_2 = total_market_2 - bks_2
     delta_rest_of_market = rest_of_market_2 - rest_of_market_1
+
+    # Financed competitors only (excluding lender and non-financed)
+    financed_competitors_1 = rest_of_market_1 - nf_bks_1
+    financed_competitors_2 = rest_of_market_2 - nf_bks_2
+    delta_financed_competitors = financed_competitors_2 - financed_competitors_1
 
     # Total market change
     delta_market = total_market_2 - total_market_1
@@ -249,6 +268,14 @@ def calculate_penetration_decomposition(
         'period_1_rest_of_market_bookings': float(rest_of_market_1),
         'period_2_rest_of_market_bookings': float(rest_of_market_2),
         'delta_rest_of_market_bookings': float(delta_rest_of_market),
+        # Non-financed bookings (included in total market and rest of market)
+        'period_1_non_financed_bookings': float(nf_bks_1),
+        'period_2_non_financed_bookings': float(nf_bks_2),
+        'delta_non_financed_bookings': float(delta_nf_bks),
+        # Financed competitors only (rest of market minus non-financed)
+        'period_1_financed_competitors_bookings': float(financed_competitors_1),
+        'period_2_financed_competitors_bookings': float(financed_competitors_2),
+        'delta_financed_competitors_bookings': float(delta_financed_competitors),
         # Penetration metrics
         'period_1_penetration': float(pen_1),
         'period_2_penetration': float(pen_2),
@@ -347,14 +374,21 @@ def _calc_competitor_booking_effects(df, date_a, date_b, date_column, exclude_le
     """
     Calculate competitor-level booking effects (REST OF MARKET approach).
 
-    Aggregates segment data across all lenders EXCEPT the excluded lender,
+    Aggregates segment data across all FINANCED lenders EXCEPT the excluded lender,
     then applies LMDI decomposition to competitor bookings.
+
+    Note: NON_FINANCED rows are always excluded as they have no funnel data to decompose.
+    The non-financed impact is included in the overall market effect via the scaling.
     """
     dims = get_dimension_columns()
 
-    # Get data for both periods, EXCLUDING the specified lender
+    # Get data for both periods, EXCLUDING the specified lender AND NON_FINANCED
     df_1 = df[df[date_column] == date_a].copy()
     df_2 = df[df[date_column] == date_b].copy()
+
+    # Always exclude NON_FINANCED (no funnel data to decompose)
+    df_1 = df_1[~df_1['lender'].apply(is_non_financed_lender)].copy()
+    df_2 = df_2[~df_2['lender'].apply(is_non_financed_lender)].copy()
 
     if exclude_lender is not None:
         df_1 = df_1[df_1['lender'] != exclude_lender].copy()
@@ -464,7 +498,11 @@ def calculate_multi_lender_penetration_decomposition(
     lenders: list = None,
     date_column: str = 'month_begin_date'
 ) -> MultiLenderPenetrationResults:
-    """Calculate penetration decomposition across multiple lenders using self-adjusted approach."""
+    """Calculate penetration decomposition across multiple lenders using self-adjusted approach.
+
+    Note: NON_FINANCED is automatically excluded from lender iteration (no funnel data).
+    Total market includes NON_FINANCED bookings in the denominator for all effects.
+    """
     date_a, date_b = normalize_date(date_a), normalize_date(date_b)
     df = df.copy()
     df[date_column] = pd.to_datetime(df[date_column])
@@ -472,7 +510,8 @@ def calculate_multi_lender_penetration_decomposition(
     if lenders is None:
         la = set(df[df[date_column] == date_a]['lender'].unique())
         lb = set(df[df[date_column] == date_b]['lender'].unique())
-        lenders = sorted(la & lb)
+        # Exclude NON_FINANCED from lender iteration
+        lenders = sorted([l for l in (la & lb) if not is_non_financed_lender(l)])
 
     results = {}
     for lender in lenders:
