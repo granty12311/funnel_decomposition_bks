@@ -37,11 +37,11 @@ CHANNEL_COLORS = {
     'NON_FF': '#FFD520'   # Yellow/Gold
 }
 
-# Tier colors
+# Tier colors (shades of blue)
 TIER_COLORS = {
-    'T1': '#1abc9c',  # Teal
-    'T2': '#f39c12',  # Orange
-    'T3': '#e74c3c'   # Red
+    'T1': '#003366',  # Dark Navy Blue
+    'T2': '#2563eb',  # Medium Blue
+    'T3': '#7dd3fc'   # Light Sky Blue
 }
 
 
