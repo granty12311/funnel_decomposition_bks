@@ -7,20 +7,36 @@ Implements LMDI (Logarithmic Mean Divisia Index) decomposition with split mix ef
 - Offer comp mix effect: Offer competitiveness distribution change
 - Approval effects: Straight and conditional approval rate changes
 - Booking effects: Straight and conditional booking rate changes
+
+Supports finance channel separation:
+- FF and Non-FF are decomposed independently
+- Results are aggregated without cross-channel mix effects
 """
 
 import pandas as pd
 import numpy as np
 import warnings
-from typing import Union, NamedTuple
+from typing import Union, NamedTuple, List, Optional
 from datetime import datetime
 
 try:
-    from .utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data, is_non_financed_lender
-    from .dimension_config import get_dimension_columns, NON_FINANCED_LENDER
+    from .utils import (
+        validate_dataframe, normalize_date, calculate_segment_bookings,
+        validate_period_data, get_all_lenders, get_all_finance_channels
+    )
+    from .dimension_config import (
+        get_dimension_columns, get_finance_channel_column,
+        get_finance_channel_values, get_lender_tier, LENDER_TIERS
+    )
 except ImportError:
-    from utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data, is_non_financed_lender
-    from dimension_config import get_dimension_columns, NON_FINANCED_LENDER
+    from utils import (
+        validate_dataframe, normalize_date, calculate_segment_bookings,
+        validate_period_data, get_all_lenders, get_all_finance_channels
+    )
+    from dimension_config import (
+        get_dimension_columns, get_finance_channel_column,
+        get_finance_channel_values, get_lender_tier, LENDER_TIERS
+    )
 
 # Dimension hierarchy for split mix calculation
 PRIMARY_DIMENSION = 'customer_segment'
@@ -28,17 +44,27 @@ SECONDARY_DIMENSION = 'offer_comp_tier'
 
 
 class DecompositionResults(NamedTuple):
-    """Container for decomposition results."""
+    """Container for single (lender, finance_channel) decomposition results."""
     summary: pd.DataFrame
     segment_detail: pd.DataFrame
     metadata: dict
 
 
+class FinanceChannelResults(NamedTuple):
+    """Container for single lender, multi-channel results."""
+    aggregate_summary: pd.DataFrame      # Combined effects (FF + Non-FF)
+    channel_summaries: pd.DataFrame      # Effects by finance_channel
+    channel_details: dict                # {channel: DecompositionResults}
+    metadata: dict
+
+
 class MultiLenderResults(NamedTuple):
-    """Container for multi-lender decomposition results."""
-    lender_summaries: pd.DataFrame
-    aggregate_summary: pd.DataFrame
-    lender_details: dict
+    """Container for multi-lender, multi-channel decomposition results."""
+    aggregate_summary: pd.DataFrame       # All lenders + channels combined
+    tier_summary: pd.DataFrame            # Aggregated by tier (T1/T2/T3)
+    channel_summary: pd.DataFrame         # Aggregated by finance_channel
+    lender_channel_summaries: pd.DataFrame  # Per lender-channel
+    details: dict                         # {(lender, channel): DecompositionResults}
     metadata: dict
 
 
@@ -79,47 +105,62 @@ def calculate_decomposition(
     df: pd.DataFrame,
     date_a: Union[str, datetime, pd.Timestamp],
     date_b: Union[str, datetime, pd.Timestamp],
-    lender: str = 'ACA',
+    lender: str,
+    finance_channel: str,
     date_column: str = 'month_begin_date'
 ) -> DecompositionResults:
     """
-    Calculate LMDI decomposition between two periods.
+    Calculate LMDI decomposition between two periods for a single lender and finance channel.
 
-    Returns 7 effects: volume, customer_mix, offer_comp_mix,
-    str_approval, cond_approval, str_booking, cond_booking.
+    Args:
+        df: Input DataFrame with all required columns including finance_channel
+        date_a: Period 1 date
+        date_b: Period 2 date
+        lender: Lender identifier
+        finance_channel: Finance channel ('FF' or 'NON_FF')
+        date_column: Name of the date column
 
-    Note: NON_FINANCED lender cannot be decomposed (no funnel data).
+    Returns:
+        DecompositionResults with 7 effects: volume, customer_mix, offer_comp_mix,
+        str_approval, cond_approval, str_booking, cond_booking.
     """
-    # Validate lender is not NON_FINANCED
-    if is_non_financed_lender(lender):
-        raise ValueError(f"Cannot calculate decomposition for {NON_FINANCED_LENDER} - no funnel data available")
-
     validate_dataframe(df, date_column=date_column)
     date_a, date_b = normalize_date(date_a), normalize_date(date_b)
+    channel_col = get_finance_channel_column()
 
     df = df.copy()
     df[date_column] = pd.to_datetime(df[date_column])
 
-    df_1 = df[(df['lender'] == lender) & (df[date_column] == date_a)].copy()
-    df_2 = df[(df['lender'] == lender) & (df[date_column] == date_b)].copy()
+    # Filter for specific lender and finance channel
+    df_1 = df[
+        (df['lender'] == lender) &
+        (df[channel_col] == finance_channel) &
+        (df[date_column] == date_a)
+    ].copy()
+    df_2 = df[
+        (df['lender'] == lender) &
+        (df[channel_col] == finance_channel) &
+        (df[date_column] == date_b)
+    ].copy()
 
     if len(df_1) == 0:
-        raise ValueError(f"No data for {lender} on {date_a.date()}")
+        raise ValueError(f"No data for {lender}/{finance_channel} on {date_a.date()}")
     if len(df_2) == 0:
-        raise ValueError(f"No data for {lender} on {date_b.date()}")
+        raise ValueError(f"No data for {lender}/{finance_channel} on {date_b.date()}")
 
     df_1 = calculate_segment_bookings(df_1)
     df_2 = calculate_segment_bookings(df_2)
 
-    validate_period_data(df_1, date_a, lender)
-    validate_period_data(df_2, date_b, lender)
+    validate_period_data(df_1, date_a, lender, finance_channel)
+    validate_period_data(df_2, date_b, lender, finance_channel)
 
     segment_detail = _calculate_effects(df_1, df_2, date_a, date_b)
-    _validate_reconciliation(segment_detail, df_1, df_2)
+    _validate_reconciliation(segment_detail, df_1, df_2, lender, finance_channel)
     summary = _aggregate_summary(segment_detail)
 
     metadata = {
         'lender': lender,
+        'finance_channel': finance_channel,
         'date_a': str(date_a.date()),
         'date_b': str(date_b.date()),
         'period_1_total_apps': int(df_1['num_tot_apps'].iloc[0]),
@@ -216,12 +257,21 @@ def _calc_rate(df: pd.DataFrame, rate_col: str, funnel: str) -> pd.Series:
     return w * log_ratio
 
 
-def _validate_reconciliation(seg: pd.DataFrame, df_1: pd.DataFrame, df_2: pd.DataFrame) -> None:
+def _validate_reconciliation(
+    seg: pd.DataFrame,
+    df_1: pd.DataFrame,
+    df_2: pd.DataFrame,
+    lender: str,
+    finance_channel: str
+) -> None:
     """Validate effects reconcile to actual changes."""
     actual = df_2['num_tot_bks'].iloc[0] - df_1['num_tot_bks'].iloc[0]
     calculated = seg['total_effect'].sum()
     if not np.isclose(calculated, actual, atol=1.0):
-        warnings.warn(f"Reconciliation: calculated={calculated:.2f}, actual={actual:.2f}")
+        warnings.warn(
+            f"Reconciliation warning for {lender}/{finance_channel}: "
+            f"calculated={calculated:.2f}, actual={actual:.2f}"
+        )
 
 
 def _aggregate_summary(seg: pd.DataFrame) -> pd.DataFrame:
@@ -236,74 +286,303 @@ def _aggregate_summary(seg: pd.DataFrame) -> pd.DataFrame:
     })
 
 
-def calculate_multi_lender_decomposition(
+# Effect type ordering for aggregation
+EFFECT_ORDER = [
+    'volume_effect', 'customer_mix_effect', 'offer_comp_mix_effect',
+    'str_approval_effect', 'cond_approval_effect', 'str_booking_effect',
+    'cond_booking_effect', 'total_change'
+]
+
+
+def calculate_finance_channel_decomposition(
     df: pd.DataFrame,
     date_a: Union[str, datetime, pd.Timestamp],
     date_b: Union[str, datetime, pd.Timestamp],
-    lenders: list = None,
+    lender: str,
+    finance_channels: Optional[List[str]] = None,
     date_column: str = 'month_begin_date'
-) -> MultiLenderResults:
-    """Calculate decomposition across multiple lenders.
+) -> FinanceChannelResults:
+    """
+    Calculate decomposition for each finance channel, then aggregate.
 
-    Note: NON_FINANCED is automatically excluded from lender iteration (no funnel data).
+    Decomposition is calculated independently for each finance channel (FF, Non-FF),
+    then effects are summed. This ensures no mix effects between finance channels.
+
+    Args:
+        df: Input DataFrame
+        date_a: Period 1 date
+        date_b: Period 2 date
+        lender: Lender identifier
+        finance_channels: List of channels to analyze (default: ['FF', 'NON_FF'])
+        date_column: Name of date column
+
+    Returns:
+        FinanceChannelResults with aggregate and per-channel breakdowns
     """
     date_a, date_b = normalize_date(date_a), normalize_date(date_b)
-    df = df.copy()
-    df[date_column] = pd.to_datetime(df[date_column])
+    channel_col = get_finance_channel_column()
 
-    if lenders is None:
-        la = set(df[df[date_column] == date_a]['lender'].unique())
-        lb = set(df[df[date_column] == date_b]['lender'].unique())
-        # Exclude NON_FINANCED from lender iteration
-        lenders = sorted([l for l in (la | lb) if not is_non_financed_lender(l)])
+    if finance_channels is None:
+        finance_channels = get_finance_channel_values()
 
-    results = {}
-    for lender in lenders:
-        print(f"Processing {lender}...")
+    # Calculate decomposition for each channel
+    channel_details = {}
+    for channel in finance_channels:
+        print(f"  Processing {lender}/{channel}...")
         try:
-            results[lender] = calculate_decomposition(df, date_a, date_b, lender, date_column)
+            channel_details[channel] = calculate_decomposition(
+                df, date_a, date_b, lender, channel, date_column
+            )
         except Exception as e:
-            warnings.warn(f"Failed {lender}: {e}")
+            warnings.warn(f"Failed {lender}/{channel}: {e}")
 
-    # Build summaries
+    if not channel_details:
+        raise ValueError(f"No successful decompositions for {lender}")
+
+    # Build channel summaries
     summaries = []
-    for lender, r in results.items():
-        s = r.summary.copy()
-        s['lender'] = lender
+    for channel, result in channel_details.items():
+        s = result.summary.copy()
+        s['finance_channel'] = channel
         summaries.append(s)
-    lender_summaries = pd.concat(summaries)[['lender', 'effect_type', 'booking_impact']]
+    channel_summaries = pd.concat(summaries)[['finance_channel', 'effect_type', 'booking_impact']]
 
-    # Aggregate
+    # Aggregate by effect type (simple sum across channels)
     agg = {}
-    for r in results.values():
-        for _, row in r.summary.iterrows():
+    for result in channel_details.values():
+        for _, row in result.summary.iterrows():
             agg[row['effect_type']] = agg.get(row['effect_type'], 0) + row['booking_impact']
 
-    effect_order = ['volume_effect', 'customer_mix_effect', 'offer_comp_mix_effect',
-                    'str_approval_effect', 'cond_approval_effect', 'str_booking_effect',
-                    'cond_booking_effect', 'total_change']
-    sorted_effects = [e for e in effect_order if e in agg]
+    sorted_effects = [e for e in EFFECT_ORDER if e in agg]
     aggregate_summary = pd.DataFrame({
         'effect_type': sorted_effects,
         'booking_impact': [agg[e] for e in sorted_effects]
     })
 
-    bks1 = sum(r.metadata['period_1_total_bookings'] for r in results.values())
-    bks2 = sum(r.metadata['period_2_total_bookings'] for r in results.values())
+    # Build metadata
+    total_bks_1 = sum(r.metadata['period_1_total_bookings'] for r in channel_details.values())
+    total_bks_2 = sum(r.metadata['period_2_total_bookings'] for r in channel_details.values())
+    total_apps_1 = sum(r.metadata['period_1_total_apps'] for r in channel_details.values())
+    total_apps_2 = sum(r.metadata['period_2_total_apps'] for r in channel_details.values())
+
+    # Per-channel totals for display
+    channel_totals = {
+        channel: {
+            'period_1_bookings': r.metadata['period_1_total_bookings'],
+            'period_2_bookings': r.metadata['period_2_total_bookings'],
+            'delta_bookings': r.metadata['delta_total_bookings']
+        }
+        for channel, r in channel_details.items()
+    }
+
+    metadata = {
+        'lender': lender,
+        'date_a': str(date_a.date()),
+        'date_b': str(date_b.date()),
+        'finance_channels': list(channel_details.keys()),
+        'period_1_total_apps': total_apps_1,
+        'period_2_total_apps': total_apps_2,
+        'period_1_total_bookings': total_bks_1,
+        'period_2_total_bookings': total_bks_2,
+        'delta_total_bookings': total_bks_2 - total_bks_1,
+        'channel_totals': channel_totals,
+        'method': 'lmdi_split_mix_multi_channel'
+    }
+
+    return FinanceChannelResults(
+        aggregate_summary=aggregate_summary,
+        channel_summaries=channel_summaries,
+        channel_details=channel_details,
+        metadata=metadata
+    )
+
+
+def calculate_multi_lender_decomposition(
+    df: pd.DataFrame,
+    date_a: Union[str, datetime, pd.Timestamp],
+    date_b: Union[str, datetime, pd.Timestamp],
+    lenders: Optional[List[str]] = None,
+    finance_channels: Optional[List[str]] = None,
+    date_column: str = 'month_begin_date'
+) -> MultiLenderResults:
+    """
+    Calculate decomposition for all lender × finance_channel combinations.
+
+    Decomposes each (lender, channel) pair independently, then aggregates:
+    - By lender-channel (raw)
+    - By tier (T1, T2, T3)
+    - By finance channel (FF, Non-FF)
+    - Total aggregate
+
+    Args:
+        df: Input DataFrame
+        date_a: Period 1 date
+        date_b: Period 2 date
+        lenders: List of lenders (default: all in data)
+        finance_channels: List of channels (default: ['FF', 'NON_FF'])
+        date_column: Date column name
+
+    Returns:
+        MultiLenderResults with tier and channel aggregations
+    """
+    date_a, date_b = normalize_date(date_a), normalize_date(date_b)
+    channel_col = get_finance_channel_column()
+
+    df = df.copy()
+    df[date_column] = pd.to_datetime(df[date_column])
+
+    # Determine lenders and channels
+    if lenders is None:
+        la = set(df[df[date_column] == date_a]['lender'].unique())
+        lb = set(df[df[date_column] == date_b]['lender'].unique())
+        lenders = sorted(la | lb)
+
+    if finance_channels is None:
+        finance_channels = get_finance_channel_values()
+
+    # Calculate decomposition for each (lender, channel) pair
+    details = {}
+    for lender in lenders:
+        for channel in finance_channels:
+            print(f"Processing {lender}/{channel}...")
+            try:
+                details[(lender, channel)] = calculate_decomposition(
+                    df, date_a, date_b, lender, channel, date_column
+                )
+            except Exception as e:
+                warnings.warn(f"Failed {lender}/{channel}: {e}")
+
+    if not details:
+        raise ValueError("No successful decompositions")
+
+    # Build lender-channel summaries
+    lc_summaries = []
+    for (lender, channel), result in details.items():
+        s = result.summary.copy()
+        s['lender'] = lender
+        s['finance_channel'] = channel
+        s['lender_tier'] = get_lender_tier(lender)
+        lc_summaries.append(s)
+    lender_channel_summaries = pd.concat(lc_summaries)[
+        ['lender', 'lender_tier', 'finance_channel', 'effect_type', 'booking_impact']
+    ]
+
+    # Aggregate by tier
+    tier_agg = {}
+    for (lender, channel), result in details.items():
+        tier = get_lender_tier(lender)
+        if tier not in tier_agg:
+            tier_agg[tier] = {}
+        for _, row in result.summary.iterrows():
+            tier_agg[tier][row['effect_type']] = (
+                tier_agg[tier].get(row['effect_type'], 0) + row['booking_impact']
+            )
+
+    tier_rows = []
+    for tier in ['T1', 'T2', 'T3']:
+        if tier in tier_agg:
+            for effect in EFFECT_ORDER:
+                if effect in tier_agg[tier]:
+                    tier_rows.append({
+                        'lender_tier': tier,
+                        'effect_type': effect,
+                        'booking_impact': tier_agg[tier][effect]
+                    })
+    tier_summary = pd.DataFrame(tier_rows)
+
+    # Aggregate by finance channel
+    channel_agg = {}
+    for (lender, channel), result in details.items():
+        if channel not in channel_agg:
+            channel_agg[channel] = {}
+        for _, row in result.summary.iterrows():
+            channel_agg[channel][row['effect_type']] = (
+                channel_agg[channel].get(row['effect_type'], 0) + row['booking_impact']
+            )
+
+    channel_rows = []
+    for channel in finance_channels:
+        if channel in channel_agg:
+            for effect in EFFECT_ORDER:
+                if effect in channel_agg[channel]:
+                    channel_rows.append({
+                        'finance_channel': channel,
+                        'effect_type': effect,
+                        'booking_impact': channel_agg[channel][effect]
+                    })
+    channel_summary = pd.DataFrame(channel_rows)
+
+    # Total aggregate
+    total_agg = {}
+    for result in details.values():
+        for _, row in result.summary.iterrows():
+            total_agg[row['effect_type']] = (
+                total_agg.get(row['effect_type'], 0) + row['booking_impact']
+            )
+
+    sorted_effects = [e for e in EFFECT_ORDER if e in total_agg]
+    aggregate_summary = pd.DataFrame({
+        'effect_type': sorted_effects,
+        'booking_impact': [total_agg[e] for e in sorted_effects]
+    })
+
+    # Build metadata
+    total_bks_1 = sum(r.metadata['period_1_total_bookings'] for r in details.values())
+    total_bks_2 = sum(r.metadata['period_2_total_bookings'] for r in details.values())
+
+    # Per-channel totals
+    channel_totals = {}
+    for channel in finance_channels:
+        channel_bks_1 = sum(
+            r.metadata['period_1_total_bookings']
+            for (l, c), r in details.items() if c == channel
+        )
+        channel_bks_2 = sum(
+            r.metadata['period_2_total_bookings']
+            for (l, c), r in details.items() if c == channel
+        )
+        channel_totals[channel] = {
+            'period_1_bookings': channel_bks_1,
+            'period_2_bookings': channel_bks_2,
+            'delta_bookings': channel_bks_2 - channel_bks_1
+        }
+
+    # Per-tier totals
+    tier_totals = {}
+    for tier in ['T1', 'T2', 'T3']:
+        tier_bks_1 = sum(
+            r.metadata['period_1_total_bookings']
+            for (l, c), r in details.items() if get_lender_tier(l) == tier
+        )
+        tier_bks_2 = sum(
+            r.metadata['period_2_total_bookings']
+            for (l, c), r in details.items() if get_lender_tier(l) == tier
+        )
+        if tier_bks_1 > 0 or tier_bks_2 > 0:
+            tier_totals[tier] = {
+                'period_1_bookings': tier_bks_1,
+                'period_2_bookings': tier_bks_2,
+                'delta_bookings': tier_bks_2 - tier_bks_1
+            }
 
     metadata = {
         'date_a': str(date_a.date()),
         'date_b': str(date_b.date()),
-        'lenders': list(results.keys()),
-        'aggregate_period_1_bookings': bks1,
-        'aggregate_period_2_bookings': bks2,
-        'aggregate_delta_bookings': bks2 - bks1,
-        'method': 'lmdi_split_mix_multi_lender'
+        'lenders': sorted(set(l for l, c in details.keys())),
+        'finance_channels': sorted(set(c for l, c in details.keys())),
+        'period_1_total_bookings': total_bks_1,
+        'period_2_total_bookings': total_bks_2,
+        'delta_total_bookings': total_bks_2 - total_bks_1,
+        'channel_totals': channel_totals,
+        'tier_totals': tier_totals,
+        'method': 'lmdi_split_mix_multi_lender_channel'
     }
 
     return MultiLenderResults(
-        lender_summaries=lender_summaries,
         aggregate_summary=aggregate_summary,
-        lender_details=results,
+        tier_summary=tier_summary,
+        channel_summary=channel_summary,
+        lender_channel_summaries=lender_channel_summaries,
+        details=details,
         metadata=metadata
     )

@@ -12,10 +12,16 @@ from typing import Union, Optional, List
 
 try:
     from .utils import format_date_label, format_number, format_percentage
-    from .dimension_config import apply_dimension_order, get_dimension_columns
+    from .dimension_config import (
+        apply_dimension_order, get_dimension_columns,
+        get_finance_channel_column, get_lender_tier, LENDER_TIERS
+    )
 except ImportError:
     from utils import format_date_label, format_number, format_percentage
-    from dimension_config import apply_dimension_order, get_dimension_columns
+    from dimension_config import (
+        apply_dimension_order, get_dimension_columns,
+        get_finance_channel_column, get_lender_tier, LENDER_TIERS
+    )
 
 
 # Color palette
@@ -24,6 +30,19 @@ COLOR_NEGATIVE = '#e74c3c'  # Red
 COLOR_TOTAL = '#95a5a6'     # Gray
 COLOR_CONNECTOR = '#34495e'  # Dark gray
 COLOR_MARKET = '#708090'    # Stone blue/slate gray for market effect
+
+# Finance channel colors
+CHANNEL_COLORS = {
+    'FF': '#00529F',      # Blue
+    'NON_FF': '#FFD520'   # Yellow/Gold
+}
+
+# Tier colors
+TIER_COLORS = {
+    'T1': '#1abc9c',  # Teal
+    'T2': '#f39c12',  # Orange
+    'T3': '#e74c3c'   # Red
+}
 
 
 def format_dimension_name(dim_name: str) -> str:
@@ -206,3 +225,112 @@ def save_figure(fig: plt.Figure, output_path: Union[str, Path], description: str
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"{description} saved to: {output_path}")
+
+
+def aggregate_by_finance_channel(
+    channel_summaries: pd.DataFrame,
+    combine_volume_mix: bool = True
+) -> pd.DataFrame:
+    """
+    Transform channel_summaries for stacked visualization.
+
+    Args:
+        channel_summaries: DataFrame with finance_channel, effect_type, booking_impact
+        combine_volume_mix: If True, combine volume + customer_mix into single effect
+
+    Returns:
+        DataFrame with columns: effect_type, finance_channel, impact
+    """
+    df = channel_summaries.copy()
+
+    if combine_volume_mix:
+        # Combine volume and customer_mix effects
+        vol_mix = df[df['effect_type'].isin(['volume_effect', 'customer_mix_effect'])]
+        combined = vol_mix.groupby('finance_channel')['booking_impact'].sum().reset_index()
+        combined['effect_type'] = 'volume_customer_mix_effect'
+        combined = combined.rename(columns={'booking_impact': 'impact'})
+
+        # Get other effects
+        other = df[~df['effect_type'].isin(['volume_effect', 'customer_mix_effect', 'total_change'])]
+        other = other.rename(columns={'booking_impact': 'impact'})
+
+        result = pd.concat([combined, other[['effect_type', 'finance_channel', 'impact']]])
+    else:
+        result = df[df['effect_type'] != 'total_change'].rename(columns={'booking_impact': 'impact'})
+
+    return result
+
+
+def aggregate_by_tier(
+    tier_summary: pd.DataFrame,
+    combine_volume_mix: bool = True
+) -> pd.DataFrame:
+    """
+    Transform tier_summary for stacked visualization.
+
+    Args:
+        tier_summary: DataFrame with lender_tier, effect_type, booking_impact
+        combine_volume_mix: If True, combine volume + customer_mix into single effect
+
+    Returns:
+        DataFrame with columns: effect_type, lender_tier, impact
+    """
+    df = tier_summary.copy()
+
+    if combine_volume_mix:
+        # Combine volume and customer_mix effects
+        vol_mix = df[df['effect_type'].isin(['volume_effect', 'customer_mix_effect'])]
+        combined = vol_mix.groupby('lender_tier')['booking_impact'].sum().reset_index()
+        combined['effect_type'] = 'volume_customer_mix_effect'
+        combined = combined.rename(columns={'booking_impact': 'impact'})
+
+        # Get other effects
+        other = df[~df['effect_type'].isin(['volume_effect', 'customer_mix_effect', 'total_change'])]
+        other = other.rename(columns={'booking_impact': 'impact'})
+
+        result = pd.concat([combined, other[['effect_type', 'lender_tier', 'impact']]])
+    else:
+        result = df[df['effect_type'] != 'total_change'].rename(columns={'booking_impact': 'impact'})
+
+    return result
+
+
+def format_channel_breakdown(metadata: dict) -> str:
+    """
+    Format channel breakdown for chart titles.
+
+    Returns string like: "(FF: +350 / Non-FF: +150)"
+    """
+    channel_totals = metadata.get('channel_totals', {})
+    if not channel_totals:
+        return ""
+
+    parts = []
+    for channel in ['FF', 'NON_FF']:
+        if channel in channel_totals:
+            delta = channel_totals[channel].get('delta_bookings', 0)
+            sign = '+' if delta >= 0 else ''
+            label = 'Non-FF' if channel == 'NON_FF' else 'FF'
+            parts.append(f"{label}: {sign}{delta:,.0f}")
+
+    return f"({' / '.join(parts)})" if parts else ""
+
+
+def format_tier_breakdown(metadata: dict) -> str:
+    """
+    Format tier breakdown for chart titles.
+
+    Returns string like: "(T1: +100 / T2: +200 / T3: +50)"
+    """
+    tier_totals = metadata.get('tier_totals', {})
+    if not tier_totals:
+        return ""
+
+    parts = []
+    for tier in ['T1', 'T2', 'T3']:
+        if tier in tier_totals:
+            delta = tier_totals[tier].get('delta_bookings', 0)
+            sign = '+' if delta >= 0 else ''
+            parts.append(f"{tier}: {sign}{delta:,.0f}")
+
+    return f"({' / '.join(parts)})" if parts else ""

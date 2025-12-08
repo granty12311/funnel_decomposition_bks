@@ -24,13 +24,83 @@ from typing import Union, NamedTuple
 from datetime import datetime
 
 try:
-    from .utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data, is_non_financed_lender, get_financed_lenders
-    from .dimension_config import get_dimension_columns, NON_FINANCED_LENDER
+    from .utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data, is_non_financed_lender, get_financed_lenders, NON_FINANCED_LENDER
+    from .dimension_config import get_dimension_columns, get_finance_channel_column
     from .lmdi_decomposition_calculator import logarithmic_mean, safe_log_ratio, PRIMARY_DIMENSION, SECONDARY_DIMENSION
 except ImportError:
-    from utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data, is_non_financed_lender, get_financed_lenders
-    from dimension_config import get_dimension_columns, NON_FINANCED_LENDER
+    from utils import validate_dataframe, normalize_date, calculate_segment_bookings, validate_period_data, is_non_financed_lender, get_financed_lenders, NON_FINANCED_LENDER
+    from dimension_config import get_dimension_columns, get_finance_channel_column
     from lmdi_decomposition_calculator import logarithmic_mean, safe_log_ratio, PRIMARY_DIMENSION, SECONDARY_DIMENSION
+
+
+def _aggregate_across_channels(df: pd.DataFrame, date_column: str = 'month_begin_date') -> pd.DataFrame:
+    """
+    Aggregate data across finance channels to get lender-level data.
+
+    For penetration analysis, we need lender-level totals, not channel-level.
+    This aggregates segment data by summing across finance channels.
+    """
+    dims = get_dimension_columns()  # ['customer_segment', 'offer_comp_tier']
+    channel_col = get_finance_channel_column()
+
+    # Check if finance_channel column exists
+    if channel_col not in df.columns:
+        return df  # No channels to aggregate
+
+    # Group by lender, date, and segment dimensions (aggregating across channels)
+    group_cols = ['lender', date_column] + dims
+
+    # For aggregation, we need to sum applications and recalculate rates
+    df = df.copy()
+
+    # Calculate segment-level counts before aggregating
+    df['segment_apps'] = df['num_tot_apps'] * df['pct_of_total_apps']
+    df['str_approvals'] = df['segment_apps'] * df['str_apprv_rate']
+    df['cond_apps'] = df['segment_apps'] * (1 - df['str_apprv_rate'])
+    df['cond_approvals'] = df['cond_apps'] * df['cond_apprv_rate']
+    df['str_bookings'] = df['str_approvals'] * df['str_bk_rate']
+    df['cond_bookings'] = df['cond_approvals'] * df['cond_bk_rate']
+    df['segment_bookings'] = df['str_bookings'] + df['cond_bookings']
+
+    # Aggregate across channels
+    agg_dict = {
+        'segment_apps': 'sum',
+        'str_approvals': 'sum',
+        'cond_apps': 'sum',
+        'cond_approvals': 'sum',
+        'str_bookings': 'sum',
+        'cond_bookings': 'sum',
+        'segment_bookings': 'sum'
+    }
+
+    agg = df.groupby(group_cols).agg(agg_dict).reset_index()
+
+    # Calculate lender-level totals
+    lender_totals = agg.groupby(['lender', date_column]).agg({
+        'segment_apps': 'sum',
+        'segment_bookings': 'sum'
+    }).reset_index().rename(columns={
+        'segment_apps': 'num_tot_apps',
+        'segment_bookings': 'num_tot_bks'
+    })
+
+    # Merge back to get lender totals
+    agg = agg.merge(lender_totals, on=['lender', date_column])
+
+    # Calculate segment percentages (of lender total apps)
+    agg['pct_of_total_apps'] = agg['segment_apps'] / agg['num_tot_apps']
+
+    # Recalculate rates from aggregated counts
+    agg['str_apprv_rate'] = agg['str_approvals'] / agg['segment_apps'].replace(0, 1)
+    agg['cond_apprv_rate'] = agg['cond_approvals'] / agg['cond_apps'].replace(0, 1)
+    agg['str_bk_rate'] = agg['str_bookings'] / agg['str_approvals'].replace(0, 1)
+    agg['cond_bk_rate'] = agg['cond_bookings'] / agg['cond_approvals'].replace(0, 1)
+
+    # Clip rates to [0, 1]
+    for col in ['str_apprv_rate', 'cond_apprv_rate', 'str_bk_rate', 'cond_bk_rate']:
+        agg[col] = agg[col].clip(0, 1)
+
+    return agg
 
 
 class PenetrationResults(NamedTuple):
@@ -86,22 +156,36 @@ def calculate_penetration_decomposition(
     df = df.copy()
     df[date_column] = pd.to_datetime(df[date_column])
 
+    # Check if finance channels are present and aggregate if so
+    channel_col = get_finance_channel_column()
+    has_channels = channel_col in df.columns
+
+    if has_channels:
+        # Aggregate across finance channels for penetration analysis
+        df_agg = _aggregate_across_channels(df, date_column)
+    else:
+        df_agg = df
+
     # Total market bookings (for penetration calculation)
-    total_market_1 = df[df[date_column] == date_a].groupby('lender')['num_tot_bks'].first().sum()
-    total_market_2 = df[df[date_column] == date_b].groupby('lender')['num_tot_bks'].first().sum()
+    # Need to sum unique lender bookings per period
+    total_market_1 = df_agg[df_agg[date_column] == date_a].groupby('lender')['num_tot_bks'].first().sum()
+    total_market_2 = df_agg[df_agg[date_column] == date_b].groupby('lender')['num_tot_bks'].first().sum()
 
     if total_market_1 == 0 or total_market_2 == 0:
         raise ValueError("No market bookings found")
 
-    # Lender data
-    df_1 = df[(df['lender'] == lender) & (df[date_column] == date_a)].copy()
-    df_2 = df[(df['lender'] == lender) & (df[date_column] == date_b)].copy()
+    # Lender data (from aggregated data)
+    df_1 = df_agg[(df_agg['lender'] == lender) & (df_agg[date_column] == date_a)].copy()
+    df_2 = df_agg[(df_agg['lender'] == lender) & (df_agg[date_column] == date_b)].copy()
 
     if len(df_1) == 0 or len(df_2) == 0:
         raise ValueError(f"No data for {lender}")
 
-    df_1 = calculate_segment_bookings(df_1)
-    df_2 = calculate_segment_bookings(df_2)
+    # Segment bookings already calculated if channels were aggregated
+    if not has_channels:
+        df_1 = calculate_segment_bookings(df_1)
+        df_2 = calculate_segment_bookings(df_2)
+
     validate_period_data(df_1, date_a, lender)
     validate_period_data(df_2, date_b, lender)
 

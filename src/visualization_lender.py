@@ -13,19 +13,23 @@ from typing import Optional
 try:
     from .visualization_utils import (
         COLOR_POSITIVE, COLOR_NEGATIVE, COLOR_TOTAL, COLOR_CONNECTOR,
-        format_effect_labels, save_figure
+        CHANNEL_COLORS, TIER_COLORS,
+        format_effect_labels, save_figure, aggregate_by_tier,
+        format_channel_breakdown, format_tier_breakdown
     )
     from .visualization_summary import _create_aggregate_waterfall
     from .utils import format_number
-    from .dimension_config import apply_dimension_order
+    from .dimension_config import apply_dimension_order, get_finance_channel_values
 except ImportError:
     from visualization_utils import (
         COLOR_POSITIVE, COLOR_NEGATIVE, COLOR_TOTAL, COLOR_CONNECTOR,
-        format_effect_labels, save_figure
+        CHANNEL_COLORS, TIER_COLORS,
+        format_effect_labels, save_figure, aggregate_by_tier,
+        format_channel_breakdown, format_tier_breakdown
     )
     from visualization_summary import _create_aggregate_waterfall
     from utils import format_number
-    from dimension_config import apply_dimension_order
+    from dimension_config import apply_dimension_order, get_finance_channel_values
 
 
 # Lender color palette
@@ -490,3 +494,462 @@ def create_lender_waterfall_grid(
         save_figure(fig, output_path, "Lender waterfall grid")
 
     return fig
+
+
+def create_multi_lender_waterfall_grid(
+    results,  # MultiLenderResults
+    output_path: str = None
+) -> plt.Figure:
+    """
+    Create waterfall grid for multi-lender, multi-channel analysis.
+
+    Layout (2x2):
+    - Top-left: Aggregate waterfall
+    - Top-right: Stacked by tier (T1, T2, T3)
+    - Bottom-left: Stacked by finance channel (FF, Non-FF)
+    - Bottom-right: Summary panel
+
+    Args:
+        results: MultiLenderResults from calculate_multi_lender_decomposition
+        output_path: Optional path to save figure
+
+    Returns:
+        matplotlib Figure object
+    """
+    metadata = results.metadata
+    date_a = metadata['date_a']
+    date_b = metadata['date_b']
+    period_1_bks = metadata['period_1_total_bookings']
+    period_2_bks = metadata['period_2_total_bookings']
+
+    # Get breakdowns for title
+    channel_breakdown = format_channel_breakdown(metadata)
+
+    delta = period_2_bks - period_1_bks
+    delta_sign = '+' if delta >= 0 else ''
+
+    # 2x2 layout with channel breakdown
+    fig, axes = plt.subplots(2, 2, figsize=(18, 14))
+    axes_flat = axes.flatten()
+
+    fig.suptitle(
+        f'Multi-Lender Booking Decomposition: {date_a} → {date_b}\n'
+        f'Total Change: {delta_sign}{delta:,.0f} {channel_breakdown}',
+        fontsize=14, fontweight='bold', y=0.98
+    )
+
+    # Chart 1: Aggregate waterfall
+    _create_aggregate_waterfall(
+        ax=axes_flat[0],
+        summary=results.aggregate_summary,
+        period_1_bks=period_1_bks,
+        period_2_bks=period_2_bks,
+        title='Overall Aggregate'
+    )
+
+    # Chart 2: Stacked by tier
+    if not results.tier_summary.empty:
+        _create_tier_stacked_waterfall(
+            ax=axes_flat[1],
+            tier_summary=results.tier_summary,
+            period_1_bks=period_1_bks,
+            period_2_bks=period_2_bks,
+            tier_totals=metadata.get('tier_totals', {}),
+            title='By Lender Tier'
+        )
+
+    # Chart 3: Stacked by channel
+    if not results.channel_summary.empty:
+        _create_channel_stacked_waterfall_lender(
+            ax=axes_flat[2],
+            channel_summary=results.channel_summary,
+            period_1_bks=period_1_bks,
+            period_2_bks=period_2_bks,
+            channel_totals=metadata.get('channel_totals', {}),
+            title='By Finance Channel'
+        )
+
+    # Chart 4: Summary panel
+    _create_summary_panel(axes_flat[3], metadata, delta, delta_sign)
+
+    plt.tight_layout()
+
+    if output_path:
+        save_figure(fig, output_path, "Multi-lender waterfall grid")
+
+    return fig
+
+
+def _create_summary_panel(ax: plt.Axes, metadata: dict, delta: float, delta_sign: str) -> None:
+    """Create summary panel with breakdown information."""
+    ax.axis('off')
+
+    period_1_bks = metadata['period_1_total_bookings']
+    period_2_bks = metadata['period_2_total_bookings']
+
+    summary_lines = [
+        f"Period 1 Bookings: {period_1_bks:,.0f}",
+        f"Period 2 Bookings: {period_2_bks:,.0f}",
+        f"Total Change: {delta_sign}{delta:,.0f}",
+        "",
+        "Tier Breakdown:",
+    ]
+
+    tier_totals = metadata.get('tier_totals', {})
+    for tier in ['T1', 'T2', 'T3']:
+        if tier in tier_totals:
+            t_delta = tier_totals[tier]['delta_bookings']
+            t_sign = '+' if t_delta >= 0 else ''
+            summary_lines.append(f"  {tier}: {t_sign}{t_delta:,.0f}")
+
+    summary_lines.extend(["", "Channel Breakdown:"])
+    channel_totals = metadata.get('channel_totals', {})
+    for ch in ['FF', 'NON_FF']:
+        if ch in channel_totals:
+            c_delta = channel_totals[ch]['delta_bookings']
+            c_sign = '+' if c_delta >= 0 else ''
+            label = 'Non-FF' if ch == 'NON_FF' else 'FF'
+            summary_lines.append(f"  {label}: {c_sign}{c_delta:,.0f}")
+
+    ax.text(0.5, 0.7, "\n".join(summary_lines),
+            transform=ax.transAxes,
+            fontsize=11, verticalalignment='top', horizontalalignment='center',
+            fontfamily='monospace',
+            bbox=dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa',
+                     edgecolor='black', linewidth=1))
+
+    # Add legends for tier and channel colors
+    tier_elements = [
+        mpatches.Patch(facecolor=TIER_COLORS.get(t, '#999999'),
+                      edgecolor='black', label=t, alpha=0.85)
+        for t in ['T1', 'T2', 'T3']
+    ]
+    channel_elements = [
+        mpatches.Patch(facecolor=CHANNEL_COLORS.get(c, '#999999'),
+                      edgecolor='black',
+                      label='Non-FF' if c == 'NON_FF' else 'FF', alpha=0.85)
+        for c in ['FF', 'NON_FF']
+    ]
+
+    ax.legend(handles=tier_elements + channel_elements,
+              loc='lower center', bbox_to_anchor=(0.5, 0.05),
+              ncol=5, fontsize=9, framealpha=0.95, edgecolor='black',
+              title='Legend')
+
+
+def _create_tier_stacked_waterfall(
+    ax: plt.Axes,
+    tier_summary: pd.DataFrame,
+    period_1_bks: float,
+    period_2_bks: float,
+    tier_totals: dict,
+    title: str
+) -> None:
+    """Create waterfall with effects stacked by lender tier."""
+
+    # Transform data for stacking
+    tier_agg = aggregate_by_tier(tier_summary, combine_volume_mix=True)
+
+    # Get effect types in order
+    effect_order = [
+        'volume_customer_mix_effect',
+        'offer_comp_mix_effect',
+        'str_approval_effect', 'cond_approval_effect',
+        'str_booking_effect', 'cond_booking_effect'
+    ]
+    effects = [e for e in effect_order if e in tier_agg['effect_type'].unique()]
+
+    labels = ['Start'] + effects + ['End']
+    x_pos = np.arange(len(labels))
+
+    tiers = ['T1', 'T2', 'T3']
+
+    # Calculate cumulative positions and values for y-axis
+    # For stacked bars, we need to track the ACTUAL extent of positive and negative stacks
+    all_values = [period_1_bks, period_2_bks]
+    cumulative = period_1_bks
+
+    for effect in effects:
+        effect_data = tier_agg[tier_agg['effect_type'] == effect]
+        total_effect = effect_data['impact'].sum()
+
+        # Track the actual stacked bar extents, not just cumulative + total
+        pos_sum = effect_data[effect_data['impact'] > 0]['impact'].sum()
+        neg_sum = effect_data[effect_data['impact'] < 0]['impact'].sum()
+
+        # Positive bars stack upward from cumulative
+        if pos_sum > 0:
+            all_values.append(cumulative + pos_sum)
+        # Negative bars stack downward from cumulative
+        if neg_sum < 0:
+            all_values.append(cumulative + neg_sum)
+
+        all_values.extend([cumulative, cumulative + total_effect])
+        cumulative += total_effect
+
+    data_min = min(all_values)
+    data_max = max(all_values)
+    data_range = max(data_max - data_min, 1)
+
+    # Use proportional padding based on data magnitude, not just range
+    # This prevents over-compression when changes are small relative to totals
+    padding_below = max(data_range * 0.3, data_max * 0.08)
+    padding_above = max(data_range * 0.2, data_max * 0.08)
+    y_min = data_min - padding_below
+    y_max = data_max + padding_above
+    y_range = y_max - y_min
+    label_offset = y_range * 0.03
+
+    # Plot Start bar
+    ax.bar(0, period_1_bks, color=COLOR_TOTAL, edgecolor='black', linewidth=1.5, width=0.78)
+    text_y_pos = (period_1_bks + y_min) / 2
+    ax.text(0, text_y_pos, format_number(period_1_bks, 0),
+           ha='center', va='center', fontsize=10, fontweight='bold')
+
+    cumulative = period_1_bks
+
+    # Plot each effect with tier stacking
+    for i, effect in enumerate(effects):
+        x = i + 1
+
+        effect_data = tier_agg[tier_agg['effect_type'] == effect]
+        total_effect = effect_data['impact'].sum()
+
+        if abs(total_effect) < 0.01:
+            ax.plot([x-1+0.3, x-0.3], [cumulative, cumulative],
+                   color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
+            ax.plot(x, cumulative, marker='o', markersize=6, color=COLOR_CONNECTOR,
+                   markeredgecolor='black', markeredgewidth=1.5, zorder=3)
+            ax.text(x, cumulative - label_offset, '+0',
+                   ha='center', va='top', fontsize=10, fontweight='bold',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                            edgecolor='black', linewidth=1.5, alpha=0.95))
+        else:
+            pos_bottom = cumulative
+            neg_bottom = cumulative
+
+            for tier in tiers:
+                tier_data = effect_data[effect_data['lender_tier'] == tier]
+                if len(tier_data) == 0:
+                    continue
+
+                val = tier_data['impact'].iloc[0]
+                color = TIER_COLORS.get(tier, '#999999')
+
+                if val >= 0:
+                    rect = Rectangle((x - 0.3, pos_bottom), 0.6, val,
+                                   facecolor=color, edgecolor='black',
+                                   linewidth=0.5, alpha=0.85)
+                    ax.add_patch(rect)
+                    pos_bottom += val
+                else:
+                    rect = Rectangle((x - 0.3, neg_bottom + val), 0.6, abs(val),
+                                   facecolor=color, edgecolor='black',
+                                   linewidth=0.5, alpha=0.85)
+                    ax.add_patch(rect)
+                    neg_bottom += val
+
+            label_y_pos = min(cumulative, cumulative + total_effect, neg_bottom)
+            sign = '+' if total_effect >= 0 else ''
+            ax.text(x, label_y_pos - label_offset, f'{sign}{format_number(total_effect, 0)}',
+                   ha='center', va='top', fontsize=10, fontweight='bold',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                            edgecolor='black', linewidth=1.5, alpha=0.95))
+
+            ax.plot([x-1+0.3, x-0.3], [cumulative, cumulative],
+                   color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
+
+        cumulative += total_effect
+
+    # Plot End bar
+    ax.bar(len(labels)-1, period_2_bks, color=COLOR_TOTAL, edgecolor='black',
+          linewidth=1.5, width=0.78)
+    text_y_pos_end = (period_2_bks + y_min) / 2
+    ax.text(len(labels)-1, text_y_pos_end, format_number(period_2_bks, 0),
+           ha='center', va='center', fontsize=10, fontweight='bold')
+
+    ax.plot([len(labels)-2+0.3, len(labels)-1-0.3], [cumulative, cumulative],
+           color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
+
+    # Formatting
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(format_effect_labels(labels), rotation=45, ha='right')
+    ax.set_ylabel('Bookings', fontsize=11, fontweight='bold')
+    ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+    ax.set_ylim(y_min, y_max)
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+    ax.axhline(y=0, color='black', linewidth=0.8)
+
+    # Legend
+    legend_elements = [
+        mpatches.Patch(facecolor=TIER_COLORS.get(t, '#999999'),
+                      edgecolor='black', label=t, alpha=0.85)
+        for t in tiers
+    ]
+    ax.legend(handles=legend_elements, loc='lower center', bbox_to_anchor=(0.5, 0.02),
+             fontsize=9, framealpha=0.95, edgecolor='black', ncol=3)
+
+
+def _create_channel_stacked_waterfall_lender(
+    ax: plt.Axes,
+    channel_summary: pd.DataFrame,
+    period_1_bks: float,
+    period_2_bks: float,
+    channel_totals: dict,
+    title: str
+) -> None:
+    """Create waterfall with effects stacked by finance channel (for multi-lender)."""
+
+    # Get effects from channel_summary (combine volume + customer_mix)
+    df = channel_summary.copy()
+
+    # Combine volume and customer_mix effects
+    vol_mix = df[df['effect_type'].isin(['volume_effect', 'customer_mix_effect'])]
+    combined = vol_mix.groupby('finance_channel')['booking_impact'].sum().reset_index()
+    combined['effect_type'] = 'volume_customer_mix_effect'
+    combined = combined.rename(columns={'booking_impact': 'impact'})
+
+    other = df[~df['effect_type'].isin(['volume_effect', 'customer_mix_effect', 'total_change'])]
+    other = other.rename(columns={'booking_impact': 'impact'})
+
+    channel_agg = pd.concat([combined, other[['effect_type', 'finance_channel', 'impact']]])
+
+    # Get effect types in order
+    effect_order = [
+        'volume_customer_mix_effect',
+        'offer_comp_mix_effect',
+        'str_approval_effect', 'cond_approval_effect',
+        'str_booking_effect', 'cond_booking_effect'
+    ]
+    effects = [e for e in effect_order if e in channel_agg['effect_type'].unique()]
+
+    labels = ['Start'] + effects + ['End']
+    x_pos = np.arange(len(labels))
+
+    channels = get_finance_channel_values()
+
+    # Calculate cumulative positions and values for y-axis
+    # For stacked bars, we need to track the ACTUAL extent of positive and negative stacks
+    all_values = [period_1_bks, period_2_bks]
+    cumulative = period_1_bks
+
+    for effect in effects:
+        effect_data = channel_agg[channel_agg['effect_type'] == effect]
+        total_effect = effect_data['impact'].sum()
+
+        # Track the actual stacked bar extents, not just cumulative + total
+        pos_sum = effect_data[effect_data['impact'] > 0]['impact'].sum()
+        neg_sum = effect_data[effect_data['impact'] < 0]['impact'].sum()
+
+        # Positive bars stack upward from cumulative
+        if pos_sum > 0:
+            all_values.append(cumulative + pos_sum)
+        # Negative bars stack downward from cumulative
+        if neg_sum < 0:
+            all_values.append(cumulative + neg_sum)
+
+        all_values.extend([cumulative, cumulative + total_effect])
+        cumulative += total_effect
+
+    data_min = min(all_values)
+    data_max = max(all_values)
+    data_range = max(data_max - data_min, 1)
+
+    # Use proportional padding based on data magnitude
+    padding_below = max(data_range * 0.3, data_max * 0.08)
+    padding_above = max(data_range * 0.2, data_max * 0.08)
+    y_min = data_min - padding_below
+    y_max = data_max + padding_above
+    y_range = y_max - y_min
+    label_offset = y_range * 0.03
+
+    # Plot Start bar
+    ax.bar(0, period_1_bks, color=COLOR_TOTAL, edgecolor='black', linewidth=1.5, width=0.78)
+    text_y_pos = (period_1_bks + y_min) / 2
+    ax.text(0, text_y_pos, format_number(period_1_bks, 0),
+           ha='center', va='center', fontsize=10, fontweight='bold')
+
+    cumulative = period_1_bks
+
+    # Plot each effect with channel stacking
+    for i, effect in enumerate(effects):
+        x = i + 1
+
+        effect_data = channel_agg[channel_agg['effect_type'] == effect]
+        total_effect = effect_data['impact'].sum()
+
+        if abs(total_effect) < 0.01:
+            ax.plot([x-1+0.3, x-0.3], [cumulative, cumulative],
+                   color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
+            ax.plot(x, cumulative, marker='o', markersize=6, color=COLOR_CONNECTOR,
+                   markeredgecolor='black', markeredgewidth=1.5, zorder=3)
+            ax.text(x, cumulative - label_offset, '+0',
+                   ha='center', va='top', fontsize=10, fontweight='bold',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                            edgecolor='black', linewidth=1.5, alpha=0.95))
+        else:
+            pos_bottom = cumulative
+            neg_bottom = cumulative
+
+            for channel in channels:
+                ch_data = effect_data[effect_data['finance_channel'] == channel]
+                if len(ch_data) == 0:
+                    continue
+
+                val = ch_data['impact'].iloc[0]
+                color = CHANNEL_COLORS.get(channel, '#999999')
+
+                if val >= 0:
+                    rect = Rectangle((x - 0.3, pos_bottom), 0.6, val,
+                                   facecolor=color, edgecolor='black',
+                                   linewidth=0.5, alpha=0.85)
+                    ax.add_patch(rect)
+                    pos_bottom += val
+                else:
+                    rect = Rectangle((x - 0.3, neg_bottom + val), 0.6, abs(val),
+                                   facecolor=color, edgecolor='black',
+                                   linewidth=0.5, alpha=0.85)
+                    ax.add_patch(rect)
+                    neg_bottom += val
+
+            label_y_pos = min(cumulative, cumulative + total_effect, neg_bottom)
+            sign = '+' if total_effect >= 0 else ''
+            ax.text(x, label_y_pos - label_offset, f'{sign}{format_number(total_effect, 0)}',
+                   ha='center', va='top', fontsize=10, fontweight='bold',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                            edgecolor='black', linewidth=1.5, alpha=0.95))
+
+            ax.plot([x-1+0.3, x-0.3], [cumulative, cumulative],
+                   color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
+
+        cumulative += total_effect
+
+    # Plot End bar
+    ax.bar(len(labels)-1, period_2_bks, color=COLOR_TOTAL, edgecolor='black',
+          linewidth=1.5, width=0.78)
+    text_y_pos_end = (period_2_bks + y_min) / 2
+    ax.text(len(labels)-1, text_y_pos_end, format_number(period_2_bks, 0),
+           ha='center', va='center', fontsize=10, fontweight='bold')
+
+    ax.plot([len(labels)-2+0.3, len(labels)-1-0.3], [cumulative, cumulative],
+           color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
+
+    # Formatting
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(format_effect_labels(labels), rotation=45, ha='right')
+    ax.set_ylabel('Bookings', fontsize=11, fontweight='bold')
+    ax.set_title(title, fontsize=12, fontweight='bold', pad=10)
+    ax.set_ylim(y_min, y_max)
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+    ax.axhline(y=0, color='black', linewidth=0.8)
+
+    # Legend
+    legend_elements = []
+    for channel in channels:
+        label = 'Non-FF' if channel == 'NON_FF' else 'FF'
+        legend_elements.append(
+            mpatches.Patch(facecolor=CHANNEL_COLORS.get(channel, '#999999'),
+                          edgecolor='black', label=label, alpha=0.85)
+        )
+    ax.legend(handles=legend_elements, loc='lower center', bbox_to_anchor=(0.5, 0.02),
+             fontsize=9, framealpha=0.95, edgecolor='black', ncol=2)
