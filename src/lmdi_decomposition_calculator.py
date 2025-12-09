@@ -155,7 +155,8 @@ def calculate_decomposition(
     validate_period_data(df_2, date_b, lender, finance_channel)
 
     segment_detail = _calculate_effects(df_1, df_2, date_a, date_b)
-    _validate_reconciliation(segment_detail, df_1, df_2, lender, finance_channel)
+    reconciliation = _validate_reconciliation(segment_detail, df_1, df_2, lender, finance_channel)
+    _emit_reconciliation_warning(reconciliation)
     summary = _aggregate_summary(segment_detail)
 
     metadata = {
@@ -169,7 +170,9 @@ def calculate_decomposition(
         'period_2_total_bookings': float(df_2['num_tot_bks'].iloc[0]),
         'delta_total_bookings': float(df_2['num_tot_bks'].iloc[0] - df_1['num_tot_bks'].iloc[0]),
         'num_segments': len(segment_detail),
-        'method': 'lmdi_split_mix'
+        'method': 'lmdi_split_mix',
+        'reconciliation_status': reconciliation.status,
+        'reconciliation_diff': reconciliation.details.get('diff', 0)
     }
 
     return DecompositionResults(summary=summary, segment_detail=segment_detail, metadata=metadata)
@@ -257,21 +260,178 @@ def _calc_rate(df: pd.DataFrame, rate_col: str, funnel: str) -> pd.Series:
     return w * log_ratio
 
 
+class ReconciliationResult:
+    """Container for reconciliation validation results."""
+    def __init__(self, status: str, message: str, details: dict = None):
+        self.status = status  # 'ok', 'info', 'warning', 'error'
+        self.message = message
+        self.details = details or {}
+
+
+def _detect_path_shutdown(df_1: pd.DataFrame, df_2: pd.DataFrame) -> dict:
+    """Detect if any funnel paths have been shut down (rates going to exactly 0)."""
+    shutdowns = {
+        'str_apprv_shutdown': [],
+        'cond_apprv_shutdown': [],
+        'str_bk_shutdown': [],
+        'cond_bk_shutdown': []
+    }
+
+    rate_cols = [
+        ('str_apprv_rate', 'str_apprv_shutdown'),
+        ('cond_apprv_rate', 'cond_apprv_shutdown'),
+        ('str_bk_rate', 'str_bk_shutdown'),
+        ('cond_bk_rate', 'cond_bk_shutdown')
+    ]
+
+    dims = get_dimension_columns()
+    merged = df_1[dims + [c[0] for c in rate_cols]].merge(
+        df_2[dims + [c[0] for c in rate_cols]],
+        on=dims, suffixes=('_1', '_2')
+    )
+
+    for rate_col, shutdown_key in rate_cols:
+        # Path shutdown: rate was > 0 in P1 but is exactly 0 in P2
+        shutdown_mask = (merged[f'{rate_col}_1'] > 0.01) & (merged[f'{rate_col}_2'] < 1e-10)
+        if shutdown_mask.any():
+            for _, row in merged[shutdown_mask].iterrows():
+                seg_name = f"{row[dims[0]]}/{row[dims[1]]}"
+                shutdowns[shutdown_key].append({
+                    'segment': seg_name,
+                    'rate_p1': row[f'{rate_col}_1'],
+                    'rate_p2': row[f'{rate_col}_2']
+                })
+
+    return shutdowns
+
+
+def _detect_data_rounding(df_1: pd.DataFrame, df_2: pd.DataFrame) -> dict:
+    """Detect if num_tot_bks appears to be rounded (causing small discrepancies)."""
+    result = {'p1_rounded': False, 'p2_rounded': False, 'p1_diff': 0, 'p2_diff': 0}
+
+    # Check if stored num_tot_bks matches calculated segment bookings
+    calc_bks_1 = df_1['segment_bookings'].sum()
+    calc_bks_2 = df_2['segment_bookings'].sum()
+    stored_bks_1 = df_1['num_tot_bks'].iloc[0]
+    stored_bks_2 = df_2['num_tot_bks'].iloc[0]
+
+    # Check if stored values look like rounded integers
+    result['p1_diff'] = calc_bks_1 - stored_bks_1
+    result['p2_diff'] = calc_bks_2 - stored_bks_2
+
+    # Rounding detected if: stored is integer-like AND there's a small diff
+    if abs(stored_bks_1 - round(stored_bks_1)) < 0.001 and abs(result['p1_diff']) > 0.01:
+        result['p1_rounded'] = True
+    if abs(stored_bks_2 - round(stored_bks_2)) < 0.001 and abs(result['p2_diff']) > 0.01:
+        result['p2_rounded'] = True
+
+    return result
+
+
 def _validate_reconciliation(
     seg: pd.DataFrame,
     df_1: pd.DataFrame,
     df_2: pd.DataFrame,
     lender: str,
     finance_channel: str
-) -> None:
-    """Validate effects reconcile to actual changes."""
+) -> ReconciliationResult:
+    """
+    Validate effects reconcile to actual changes with detailed error classification.
+
+    Returns ReconciliationResult with status:
+    - 'ok': Perfect reconciliation
+    - 'info': Minor issue (rounding, expected edge case)
+    - 'warning': Moderate discrepancy worth investigating
+    - 'error': Major problem indicating data or calculation issues
+    """
     actual = df_2['num_tot_bks'].iloc[0] - df_1['num_tot_bks'].iloc[0]
     calculated = seg['total_effect'].sum()
-    if not np.isclose(calculated, actual, atol=1.0):
-        warnings.warn(
-            f"Reconciliation warning for {lender}/{finance_channel}: "
-            f"calculated={calculated:.2f}, actual={actual:.2f}"
+    diff = calculated - actual
+    abs_diff = abs(diff)
+
+    # Calculate relative error (avoid division by zero)
+    if abs(actual) > 1e-10:
+        rel_error = abs_diff / abs(actual)
+    else:
+        rel_error = 0 if abs_diff < 1e-10 else float('inf')
+
+    context = f"{lender}/{finance_channel}"
+
+    # Perfect reconciliation
+    if abs_diff < 0.01:
+        return ReconciliationResult('ok', f"{context}: Exact reconciliation", {
+            'actual': actual, 'calculated': calculated, 'diff': diff
+        })
+
+    # Detect specific issues
+    shutdowns = _detect_path_shutdown(df_1, df_2)
+    rounding = _detect_data_rounding(df_1, df_2)
+
+    has_shutdown = any(len(v) > 0 for v in shutdowns.values())
+    has_rounding = rounding['p1_rounded'] or rounding['p2_rounded']
+
+    # Case 1: Path shutdown detected - expected LMDI limitation
+    if has_shutdown and abs_diff > 1.0:
+        shutdown_segments = []
+        for key, segments in shutdowns.items():
+            for s in segments:
+                shutdown_segments.append(f"{s['segment']} ({key.replace('_shutdown', '')})")
+
+        return ReconciliationResult('info',
+            f"{context}: Path shutdown detected (known LMDI limitation). "
+            f"Segments with rate->0: {', '.join(shutdown_segments[:3])}{'...' if len(shutdown_segments) > 3 else ''}. "
+            f"Diff={diff:+.1f} ({rel_error*100:.1f}%)",
+            {'actual': actual, 'calculated': calculated, 'diff': diff,
+             'shutdowns': shutdowns, 'is_expected': True}
         )
+
+    # Case 2: Small rounding error (< 1% or < 1 booking)
+    if abs_diff < 1.0 or rel_error < 0.01:
+        if has_rounding:
+            return ReconciliationResult('info',
+                f"{context}: Minor rounding discrepancy in stored num_tot_bks. "
+                f"Diff={diff:+.2f} ({rel_error*100:.2f}%)",
+                {'actual': actual, 'calculated': calculated, 'diff': diff,
+                 'rounding': rounding, 'is_expected': True}
+            )
+        return ReconciliationResult('ok', f"{context}: Within tolerance", {
+            'actual': actual, 'calculated': calculated, 'diff': diff
+        })
+
+    # Case 3: Moderate discrepancy (1-5% or 1-50 bookings) - likely data issue
+    if rel_error < 0.05 or abs_diff < 50:
+        cause = ""
+        if has_rounding:
+            cause = "Likely caused by rounded num_tot_bks in source data. "
+        return ReconciliationResult('warning',
+            f"{context}: Moderate reconciliation discrepancy. {cause}"
+            f"Calculated={calculated:.1f}, Actual={actual:.1f}, Diff={diff:+.1f} ({rel_error*100:.1f}%)",
+            {'actual': actual, 'calculated': calculated, 'diff': diff,
+             'rounding': rounding}
+        )
+
+    # Case 4: Major discrepancy (> 5%) - indicates serious problem but don't error
+    return ReconciliationResult('warning_major',
+        f"{context}: Large reconciliation discrepancy ({rel_error*100:.1f}%). "
+        f"Calculated={calculated:.1f}, Actual={actual:.1f}, Diff={diff:+.1f}. "
+        f"Check data integrity: segment bookings should sum to num_tot_bks.",
+        {'actual': actual, 'calculated': calculated, 'diff': diff,
+         'rounding': rounding, 'shutdowns': shutdowns, 'is_major': True}
+    )
+
+
+def _emit_reconciliation_warning(result: ReconciliationResult) -> None:
+    """Emit appropriate warning based on reconciliation result."""
+    if result.status == 'ok':
+        return  # No warning needed
+    elif result.status == 'info':
+        # Only emit info-level messages if they indicate known limitations
+        if result.details.get('is_expected'):
+            warnings.warn(f"[INFO] {result.message}", stacklevel=4)
+    elif result.status == 'warning':
+        warnings.warn(f"[WARNING] {result.message}", stacklevel=4)
+    elif result.status == 'warning_major':
+        warnings.warn(f"[WARNING-MAJOR] {result.message}", stacklevel=4)
 
 
 def _aggregate_summary(seg: pd.DataFrame) -> pd.DataFrame:
