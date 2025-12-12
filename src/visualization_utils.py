@@ -54,7 +54,9 @@ def format_effect_labels(labels: List[str]) -> List[str]:
     """Format effect labels for display."""
     label_map = {
         'Start': 'Start', 'End': 'End',
-        'volume_effect': 'Volume', 'customer_mix_effect': 'Cust Mix',
+        'volume_effect': 'Volume',
+        'vsa_progression_effect': 'VSA Prog',  # NEW: VSA Progression
+        'customer_mix_effect': 'Cust Mix',
         'offer_comp_mix_effect': 'Comp Offer Mix',
         'volume_customer_mix_effect': 'Vol + Cust Mix',
         'str_approval_effect': 'Str Apprv', 'cond_approval_effect': 'Cond Apprv',
@@ -105,6 +107,7 @@ def aggregate_by_dimension(
     """Aggregate effects by dimension values for dimensional waterfall charts."""
     effect_column_map = {
         'volume_effect': 'volume_effect',
+        'vsa_progression_effect': 'vsa_progression_effect',  # NEW: VSA Progression
         'mix_effect': 'mix_effect',
         'customer_mix_effect': 'customer_mix_effect',
         'offer_comp_mix_effect': 'offer_comp_mix_effect',
@@ -175,7 +178,7 @@ def aggregate_penetration_by_dimension(
 ) -> pd.DataFrame:
     """Aggregate penetration effects by dimension values (in bps)."""
     effect_cols_bps = [
-        'volume_effect_bps', 'customer_mix_effect_bps', 'offer_comp_mix_effect_bps',
+        'volume_effect_bps', 'vsa_progression_effect_bps', 'customer_mix_effect_bps', 'offer_comp_mix_effect_bps',
         'str_approval_effect_bps', 'cond_approval_effect_bps',
         'str_booking_effect_bps', 'cond_booking_effect_bps'
     ]
@@ -244,13 +247,13 @@ def aggregate_by_finance_channel(
     df = channel_summaries.copy()
 
     if combine_volume_mix:
-        # Combine volume and customer_mix effects
+        # Combine volume and customer_mix effects (vsa_progression_effect is separate)
         vol_mix = df[df['effect_type'].isin(['volume_effect', 'customer_mix_effect'])]
         combined = vol_mix.groupby('finance_channel')['booking_impact'].sum().reset_index()
         combined['effect_type'] = 'volume_customer_mix_effect'
         combined = combined.rename(columns={'booking_impact': 'impact'})
 
-        # Get other effects
+        # Get other effects (including vsa_progression_effect)
         other = df[~df['effect_type'].isin(['volume_effect', 'customer_mix_effect', 'total_change'])]
         other = other.rename(columns={'booking_impact': 'impact'})
 
@@ -278,13 +281,13 @@ def aggregate_by_tier(
     df = tier_summary.copy()
 
     if combine_volume_mix:
-        # Combine volume and customer_mix effects
+        # Combine volume and customer_mix effects (vsa_progression_effect is separate)
         vol_mix = df[df['effect_type'].isin(['volume_effect', 'customer_mix_effect'])]
         combined = vol_mix.groupby('lender_tier')['booking_impact'].sum().reset_index()
         combined['effect_type'] = 'volume_customer_mix_effect'
         combined = combined.rename(columns={'booking_impact': 'impact'})
 
-        # Get other effects
+        # Get other effects (including vsa_progression_effect)
         other = df[~df['effect_type'].isin(['volume_effect', 'customer_mix_effect', 'total_change'])]
         other = other.rename(columns={'booking_impact': 'impact'})
 

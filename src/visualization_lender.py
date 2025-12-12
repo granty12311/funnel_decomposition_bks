@@ -650,9 +650,10 @@ def _create_tier_stacked_waterfall(
     # Transform data for stacking
     tier_agg = aggregate_by_tier(tier_summary, combine_volume_mix=True)
 
-    # Get effect types in order
+    # Get effect types in order (8 effects with VSA Progression)
     effect_order = [
         'volume_customer_mix_effect',
+        'vsa_progression_effect',
         'offer_comp_mix_effect',
         'str_approval_effect', 'cond_approval_effect',
         'str_booking_effect', 'cond_booking_effect'
@@ -814,9 +815,10 @@ def _create_channel_stacked_waterfall_lender(
 
     channel_agg = pd.concat([combined, other[['effect_type', 'finance_channel', 'impact']]])
 
-    # Get effect types in order
+    # Get effect types in order (8 effects with VSA Progression)
     effect_order = [
         'volume_customer_mix_effect',
+        'vsa_progression_effect',
         'offer_comp_mix_effect',
         'str_approval_effect', 'cond_approval_effect',
         'str_booking_effect', 'cond_booking_effect'

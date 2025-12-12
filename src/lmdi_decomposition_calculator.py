@@ -180,26 +180,31 @@ def calculate_decomposition(
 
 def _calculate_effects(df_1: pd.DataFrame, df_2: pd.DataFrame, date_a, date_b) -> pd.DataFrame:
     """Calculate all LMDI effects for each segment."""
-    # Calculate customer shares (marginal distribution)
+    # Calculate customer shares (marginal distribution) using pct_of_total_apps
+    # Since VSA Progression is a separate effect, mix should use the original app mix
     cs1 = df_1.groupby(PRIMARY_DIMENSION)['pct_of_total_apps'].sum()
     cs2 = df_2.groupby(PRIMARY_DIMENSION)['pct_of_total_apps'].sum()
     df_1['customer_share'] = df_1[PRIMARY_DIMENSION].map(cs1)
     df_2['customer_share'] = df_2[PRIMARY_DIMENSION].map(cs2)
 
-    # Calculate offer comp shares (conditional distribution)
+    # Calculate offer comp shares (conditional distribution) using pct_of_total_apps
     df_1['offer_comp_share'] = df_1['pct_of_total_apps'] / df_1['customer_share']
     df_2['offer_comp_share'] = df_2['pct_of_total_apps'] / df_2['customer_share']
 
     # Merge periods
     dims = get_dimension_columns()
-    cols = dims + ['num_tot_apps', 'pct_of_total_apps', 'customer_share', 'offer_comp_share',
-                   'segment_apps', 'str_apprv_rate', 'str_bk_rate', 'cond_apprv_rate', 'cond_bk_rate',
+    cols = dims + ['num_tot_apps', 'pct_of_total_apps', 'pct_of_total_vsa', 'vsa_prog_pct',
+                   'customer_share', 'offer_comp_share',
+                   'segment_apps', 'segment_vsa',  # VSA count for approval rate weights
+                   'str_approvals', 'cond_approvals',  # Approval counts for correct LMDI weights
+                   'str_apprv_rate', 'str_bk_rate', 'cond_apprv_rate', 'cond_bk_rate',
                    'segment_bookings', 'str_bookings', 'cond_bookings']
 
     m = df_1[cols].merge(df_2[cols], on=dims, suffixes=('_1', '_2'))
 
-    # Calculate LMDI effects
+    # Calculate LMDI effects (now 8 effects with VSA Progression)
     m['volume_effect'] = _calc_volume(m)
+    m['vsa_progression_effect'] = _calc_vsa_progression(m)  # NEW: VSA Progression
     m['customer_mix_effect'] = _calc_mix(m, 'customer_share')
     m['offer_comp_mix_effect'] = _calc_mix(m, 'offer_comp_share')
     m['str_approval_effect'] = _calc_rate(m, 'str_apprv_rate', 'str')
@@ -207,7 +212,8 @@ def _calculate_effects(df_1: pd.DataFrame, df_2: pd.DataFrame, date_a, date_b) -
     m['str_booking_effect'] = _calc_rate(m, 'str_bk_rate', 'str')
     m['cond_booking_effect'] = _calc_rate(m, 'cond_bk_rate', 'cond')
 
-    m['total_effect'] = (m['volume_effect'] + m['customer_mix_effect'] + m['offer_comp_mix_effect'] +
+    m['total_effect'] = (m['volume_effect'] + m['vsa_progression_effect'] +
+                         m['customer_mix_effect'] + m['offer_comp_mix_effect'] +
                          m['str_approval_effect'] + m['cond_approval_effect'] +
                          m['str_booking_effect'] + m['cond_booking_effect'])
 
@@ -217,9 +223,14 @@ def _calculate_effects(df_1: pd.DataFrame, df_2: pd.DataFrame, date_a, date_b) -
     rename_map = {
         'num_tot_apps_1': 'period_1_total_apps', 'num_tot_apps_2': 'period_2_total_apps',
         'pct_of_total_apps_1': 'period_1_pct_of_total', 'pct_of_total_apps_2': 'period_2_pct_of_total',
+        'pct_of_total_vsa_1': 'period_1_pct_of_total_vsa', 'pct_of_total_vsa_2': 'period_2_pct_of_total_vsa',
+        'vsa_prog_pct_1': 'period_1_vsa_prog_pct', 'vsa_prog_pct_2': 'period_2_vsa_prog_pct',
         'customer_share_1': 'period_1_customer_share', 'customer_share_2': 'period_2_customer_share',
         'offer_comp_share_1': 'period_1_offer_comp_share', 'offer_comp_share_2': 'period_2_offer_comp_share',
         'segment_apps_1': 'period_1_segment_apps', 'segment_apps_2': 'period_2_segment_apps',
+        'segment_vsa_1': 'period_1_segment_vsa', 'segment_vsa_2': 'period_2_segment_vsa',
+        'str_approvals_1': 'period_1_str_approvals', 'str_approvals_2': 'period_2_str_approvals',
+        'cond_approvals_1': 'period_1_cond_approvals', 'cond_approvals_2': 'period_2_cond_approvals',
         'str_apprv_rate_1': 'period_1_str_apprv_rate', 'str_apprv_rate_2': 'period_2_str_apprv_rate',
         'str_bk_rate_1': 'period_1_str_bk_rate', 'str_bk_rate_2': 'period_2_str_bk_rate',
         'cond_apprv_rate_1': 'period_1_cond_apprv_rate', 'cond_apprv_rate_2': 'period_2_cond_apprv_rate',
@@ -244,6 +255,18 @@ def _calc_volume(df: pd.DataFrame) -> pd.Series:
     return (w_str + w_cond) * log_vol
 
 
+def _calc_vsa_progression(df: pd.DataFrame) -> pd.Series:
+    """Calculate VSA progression effect.
+
+    Calculated as rate effect with combined weight (str + cond bookings).
+    Effect = [L(Str_Bks_1, Str_Bks_2) + L(Cond_Bks_1, Cond_Bks_2)] × ln(vsa_prog_pct_2 / vsa_prog_pct_1)
+    """
+    log_ratio = safe_log_ratio(df['vsa_prog_pct_2'], df['vsa_prog_pct_1'])
+    w_str = df.apply(lambda r: logarithmic_mean(r['str_bookings_1'], r['str_bookings_2']), axis=1)
+    w_cond = df.apply(lambda r: logarithmic_mean(r['cond_bookings_1'], r['cond_bookings_2']), axis=1)
+    return (w_str + w_cond) * log_ratio
+
+
 def _calc_mix(df: pd.DataFrame, share_col: str) -> pd.Series:
     """Calculate mix effect for given share column."""
     log_ratio = safe_log_ratio(df[f'{share_col}_2'], df[f'{share_col}_1'])
@@ -253,7 +276,12 @@ def _calc_mix(df: pd.DataFrame, share_col: str) -> pd.Series:
 
 
 def _calc_rate(df: pd.DataFrame, rate_col: str, funnel: str) -> pd.Series:
-    """Calculate rate effect for given rate column."""
+    """Calculate rate effect for given rate column.
+
+    For multiplicative decomposition (Y = A × B × C), all effects use L(Y) as weight.
+    For str_bookings = segment_vsa × str_apprv_rate × str_bk_rate:
+    - All effects use L(str_bookings) as weight
+    """
     bks_col = f'{funnel}_bookings'
     w = df.apply(lambda r: logarithmic_mean(r[f'{bks_col}_1'], r[f'{bks_col}_2']), axis=1)
     log_ratio = safe_log_ratio(df[f'{rate_col}_2'], df[f'{rate_col}_1'])
@@ -435,8 +463,8 @@ def _emit_reconciliation_warning(result: ReconciliationResult) -> None:
 
 
 def _aggregate_summary(seg: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate effects for summary."""
-    effects = ['volume_effect', 'customer_mix_effect', 'offer_comp_mix_effect',
+    """Aggregate effects for summary (now 8 effects with VSA Progression)."""
+    effects = ['volume_effect', 'vsa_progression_effect', 'customer_mix_effect', 'offer_comp_mix_effect',
                'str_approval_effect', 'cond_approval_effect', 'str_booking_effect', 'cond_booking_effect']
     vals = [seg[e].sum() for e in effects]
     total = sum(vals)
@@ -446,9 +474,9 @@ def _aggregate_summary(seg: pd.DataFrame) -> pd.DataFrame:
     })
 
 
-# Effect type ordering for aggregation
+# Effect type ordering for aggregation (8 effects with VSA Progression)
 EFFECT_ORDER = [
-    'volume_effect', 'customer_mix_effect', 'offer_comp_mix_effect',
+    'volume_effect', 'vsa_progression_effect', 'customer_mix_effect', 'offer_comp_mix_effect',
     'str_approval_effect', 'cond_approval_effect', 'str_booking_effect',
     'cond_booking_effect', 'total_change'
 ]

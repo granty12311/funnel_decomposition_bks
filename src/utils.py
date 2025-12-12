@@ -52,7 +52,8 @@ def validate_dataframe(df: pd.DataFrame, date_column: str = 'month_begin_date') 
     required_cols = [
         'lender', channel_col, date_column, *dimension_cols,
         'num_tot_bks', 'num_tot_apps', 'pct_of_total_apps',
-        'str_apprv_rate', 'str_bk_rate', 'cond_apprv_rate', 'cond_bk_rate'
+        'str_apprv_rate', 'str_bk_rate', 'cond_apprv_rate', 'cond_bk_rate',
+        'vsa_prog_pct'  # VSA Progression rate (pct_of_total_vsa is derived)
     ]
     missing = [col for col in required_cols if col not in df.columns]
     if missing:
@@ -73,14 +74,37 @@ def normalize_date(date_input: Union[str, datetime, date, pd.Timestamp]) -> pd.T
 
 
 def calculate_segment_bookings(df: pd.DataFrame) -> pd.DataFrame:
-    """Calculate derived segment-level booking metrics."""
+    """Calculate derived segment-level booking metrics.
+
+    New VSA progression flow:
+    1. segment_apps = num_tot_apps × pct_of_total_apps
+    2. segment_vsa = segment_apps × vsa_prog_pct
+    3. pct_of_total_vsa = segment_vsa / sum(segment_vsa) (derived, for reporting)
+    4. Funnel flow uses segment_vsa as the base
+    """
     df = df.copy()
+
+    # Step 1: Calculate segment applications
     df['segment_apps'] = df['num_tot_apps'] * df['pct_of_total_apps']
-    df['str_approvals'] = df['segment_apps'] * df['str_apprv_rate']
+
+    # Step 2: Calculate segment VSAs (applications that progressed to VSA)
+    df['segment_vsa'] = df['segment_apps'] * df['vsa_prog_pct']
+
+    # Step 3: Calculate pct_of_total_vsa (derived column for reporting/validation)
+    # This is the VSA-adjusted mix that sums to 1.0
+    total_vsa = df['segment_vsa'].sum()
+    if total_vsa > 0:
+        df['pct_of_total_vsa'] = df['segment_vsa'] / total_vsa
+    else:
+        df['pct_of_total_vsa'] = 0.0
+
+    # Step 3: Funnel flow from segment_vsa
+    df['str_approvals'] = df['segment_vsa'] * df['str_apprv_rate']
     df['str_bookings'] = df['str_approvals'] * df['str_bk_rate']
-    df['cond_approvals'] = df['segment_apps'] * df['cond_apprv_rate']
+    df['cond_approvals'] = df['segment_vsa'] * df['cond_apprv_rate']
     df['cond_bookings'] = df['cond_approvals'] * df['cond_bk_rate']
     df['segment_bookings'] = df['str_bookings'] + df['cond_bookings']
+
     return df
 
 
@@ -90,19 +114,34 @@ def validate_period_data(
     lender: str,
     finance_channel: str = None
 ) -> None:
-    """Validate period data: mix sums to 1.0, bookings reconcile.
+    """Validate period data: mix sums to 1.0, bookings reconcile, VSA progression valid.
 
     Validates for a specific (lender, finance_channel, date) combination.
     If finance_channel is None, validates aggregate across all channels.
     """
-    # When validating across all channels, skip pct_of_total_apps check
-    # since it sums to 1.0 per channel, not across all channels
+    # When validating across all channels, skip mix checks
+    # since they sum to 1.0 per channel, not across all channels
     if finance_channel is not None:
         pct_sum = df['pct_of_total_apps'].sum()
         if not np.isclose(pct_sum, 1.0, atol=1e-6):
             raise ValueError(
                 f"pct_of_total_apps={pct_sum:.6f} for {lender}/{finance_channel} on {date.date()}"
             )
+
+        # Validate pct_of_total_vsa sums to 1.0 (if present - it's derived on-the-fly now)
+        if 'pct_of_total_vsa' in df.columns:
+            vsa_sum = df['pct_of_total_vsa'].sum()
+            if not np.isclose(vsa_sum, 1.0, atol=1e-6):
+                raise ValueError(
+                    f"pct_of_total_vsa={vsa_sum:.6f} (expected 1.0) for {lender}/{finance_channel} on {date.date()}"
+                )
+
+    # Validate vsa_prog_pct bounds [0, 1]
+    if not df['vsa_prog_pct'].between(0, 1).all():
+        invalid = df[~df['vsa_prog_pct'].between(0, 1)]['vsa_prog_pct'].values
+        raise ValueError(
+            f"vsa_prog_pct must be [0,1] for {lender}/{finance_channel} on {date.date()}. Found: {invalid}"
+        )
 
     segment_bks = df['segment_bookings'].sum()
     total_bks = df['num_tot_bks'].iloc[0]

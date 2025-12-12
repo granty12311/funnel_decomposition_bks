@@ -53,10 +53,11 @@ def _aggregate_across_channels(df: pd.DataFrame, date_column: str = 'month_begin
     # For aggregation, we need to sum applications and recalculate rates
     df = df.copy()
 
-    # Calculate segment-level counts before aggregating
+    # Calculate segment-level counts before aggregating (new VSA flow)
     df['segment_apps'] = df['num_tot_apps'] * df['pct_of_total_apps']
-    df['str_approvals'] = df['segment_apps'] * df['str_apprv_rate']
-    df['cond_apps'] = df['segment_apps'] * (1 - df['str_apprv_rate'])
+    df['segment_vsa'] = df['segment_apps'] * df['vsa_prog_pct']
+    df['str_approvals'] = df['segment_vsa'] * df['str_apprv_rate']
+    df['cond_apps'] = df['segment_vsa'] * (1 - df['str_apprv_rate'])
     df['cond_approvals'] = df['cond_apps'] * df['cond_apprv_rate']
     df['str_bookings'] = df['str_approvals'] * df['str_bk_rate']
     df['cond_bookings'] = df['cond_approvals'] * df['cond_bk_rate']
@@ -89,6 +90,12 @@ def _aggregate_across_channels(df: pd.DataFrame, date_column: str = 'month_begin
 
     # Calculate segment percentages (of lender total apps)
     agg['pct_of_total_apps'] = agg['segment_apps'] / agg['num_tot_apps']
+
+    # Calculate VSA progression metrics (aggregated values)
+    # After aggregation, set vsa_prog_pct = 1.0 and pct_of_total_vsa = pct_of_total_apps
+    # This maintains consistency for penetration analysis at the lender level
+    agg['vsa_prog_pct'] = 1.0
+    agg['pct_of_total_vsa'] = agg['pct_of_total_apps']
 
     # Recalculate rates from aggregated counts
     agg['str_apprv_rate'] = agg['str_approvals'] / agg['segment_apps'].replace(0, 1)
@@ -279,8 +286,8 @@ def calculate_penetration_decomposition(
         competitor_scale = 0.0
     competitor_pen_effects = {k: v * competitor_scale for k, v in competitor_bks_effects.items()}
 
-    # Net effects = Net lender + Competitor
-    effect_names = ['volume_effect', 'customer_mix_effect', 'offer_comp_mix_effect',
+    # Net effects = Net lender + Competitor (now 8 effects with VSA Progression)
+    effect_names = ['volume_effect', 'vsa_progression_effect', 'customer_mix_effect', 'offer_comp_mix_effect',
                     'str_approval_effect', 'cond_approval_effect', 'str_booking_effect',
                     'cond_booking_effect']
 
@@ -386,8 +393,8 @@ def calculate_penetration_decomposition(
 
 
 def _calc_booking_effects(df_1, df_2, date_a, date_b):
-    """Calculate segment-level booking effects for a single lender."""
-    # Customer shares
+    """Calculate segment-level booking effects for a single lender (now 8 effects with VSA Progression)."""
+    # Customer shares (using pct_of_total_apps since VSA Progression is separate)
     cs1 = df_1.groupby(PRIMARY_DIMENSION)['pct_of_total_apps'].sum()
     cs2 = df_2.groupby(PRIMARY_DIMENSION)['pct_of_total_apps'].sum()
     df_1 = df_1.copy()
@@ -399,7 +406,8 @@ def _calc_booking_effects(df_1, df_2, date_a, date_b):
 
     # Merge
     dims = get_dimension_columns()
-    cols = dims + ['num_tot_apps', 'pct_of_total_apps', 'customer_share', 'offer_comp_share',
+    cols = dims + ['num_tot_apps', 'pct_of_total_apps', 'pct_of_total_vsa', 'vsa_prog_pct',
+                   'customer_share', 'offer_comp_share',
                    'segment_apps', 'str_apprv_rate', 'str_bk_rate', 'cond_apprv_rate', 'cond_bk_rate',
                    'segment_bookings', 'str_bookings', 'cond_bookings']
     m = df_1[cols].merge(df_2[cols], on=dims, suffixes=('_1', '_2'))
@@ -412,6 +420,7 @@ def _calc_booking_effects(df_1, df_2, date_a, date_b):
     # Log ratios
     apps_1, apps_2 = df_1['num_tot_apps'].iloc[0], df_2['num_tot_apps'].iloc[0]
     m['ln_vol'] = safe_log_ratio(apps_2, apps_1)
+    m['ln_vsa'] = safe_log_ratio(m['vsa_prog_pct_2'], m['vsa_prog_pct_1'])  # NEW: VSA Progression
     m['ln_cs'] = safe_log_ratio(m['customer_share_2'], m['customer_share_1'])
     m['ln_ocs'] = safe_log_ratio(m['offer_comp_share_2'], m['offer_comp_share_1'])
     m['ln_str_app'] = safe_log_ratio(m['str_apprv_rate_2'], m['str_apprv_rate_1'])
@@ -419,8 +428,9 @@ def _calc_booking_effects(df_1, df_2, date_a, date_b):
     m['ln_str_bk'] = safe_log_ratio(m['str_bk_rate_2'], m['str_bk_rate_1'])
     m['ln_cond_bk'] = safe_log_ratio(m['cond_bk_rate_2'], m['cond_bk_rate_1'])
 
-    # Effects
+    # Effects (now 8 effects with VSA Progression)
     m['volume_effect_bks'] = m['w_total'] * m['ln_vol']
+    m['vsa_progression_effect_bks'] = m['w_total'] * m['ln_vsa']  # NEW: VSA Progression
     m['customer_mix_effect_bks'] = m['w_total'] * m['ln_cs']
     m['offer_comp_mix_effect_bks'] = m['w_total'] * m['ln_ocs']
     m['str_approval_effect_bks'] = m['w_str'] * m['ln_str_app']
@@ -443,6 +453,7 @@ def _calc_booking_effects(df_1, df_2, date_a, date_b):
 
     effects = {
         'volume_effect': m['volume_effect_bks'].sum(),
+        'vsa_progression_effect': m['vsa_progression_effect_bks'].sum(),  # NEW: VSA Progression
         'customer_mix_effect': m['customer_mix_effect_bks'].sum(),
         'offer_comp_mix_effect': m['offer_comp_mix_effect_bks'].sum(),
         'str_approval_effect': m['str_approval_effect_bks'].sum(),
@@ -509,7 +520,13 @@ def _calc_competitor_booking_effects(df, date_a, date_b, date_column, exclude_le
     mkt_1['pct_of_total_apps'] = mkt_1['segment_apps'] / total_apps_1
     mkt_2['pct_of_total_apps'] = mkt_2['segment_apps'] / total_apps_2
 
-    # Calculate customer shares (primary dimension)
+    # For aggregated market data, set vsa_prog_pct = 1.0 and pct_of_total_vsa = pct_of_total_apps
+    mkt_1['vsa_prog_pct'] = 1.0
+    mkt_2['vsa_prog_pct'] = 1.0
+    mkt_1['pct_of_total_vsa'] = mkt_1['pct_of_total_apps']
+    mkt_2['pct_of_total_vsa'] = mkt_2['pct_of_total_apps']
+
+    # Calculate customer shares (primary dimension) using pct_of_total_apps
     cs1 = mkt_1.groupby(PRIMARY_DIMENSION)['pct_of_total_apps'].sum()
     cs2 = mkt_2.groupby(PRIMARY_DIMENSION)['pct_of_total_apps'].sum()
     mkt_1['customer_share'] = mkt_1[PRIMARY_DIMENSION].map(cs1)
@@ -542,6 +559,7 @@ def _calc_competitor_booking_effects(df, date_a, date_b, date_column, exclude_le
 
     # Log ratios for volume and mix
     m['ln_vol'] = safe_log_ratio(total_apps_2, total_apps_1)
+    m['ln_vsa'] = safe_log_ratio(m['vsa_prog_pct_2'], m['vsa_prog_pct_1'])  # NEW: VSA Progression
     m['ln_cs'] = safe_log_ratio(m['customer_share_2'], m['customer_share_1'])
     m['ln_ocs'] = safe_log_ratio(m['offer_comp_share_2'], m['offer_comp_share_1'])
 
@@ -551,8 +569,9 @@ def _calc_competitor_booking_effects(df, date_a, date_b, date_column, exclude_le
     m['ln_cond_app'] = safe_log_ratio(m['cond_apprv_rate_2'], m['cond_apprv_rate_1'])
     m['ln_cond_bk'] = safe_log_ratio(m['cond_bk_rate_2'], m['cond_bk_rate_1'])
 
-    # Effects (in booking terms)
+    # Effects (in booking terms, now 8 effects with VSA Progression)
     m['volume_effect_bks'] = m['w_total'] * m['ln_vol']
+    m['vsa_progression_effect_bks'] = m['w_total'] * m['ln_vsa']  # NEW: VSA Progression
     m['customer_mix_effect_bks'] = m['w_total'] * m['ln_cs']
     m['offer_comp_mix_effect_bks'] = m['w_total'] * m['ln_ocs']
 
@@ -564,6 +583,7 @@ def _calc_competitor_booking_effects(df, date_a, date_b, date_column, exclude_le
     # Aggregate effects
     effects = {
         'volume_effect': m['volume_effect_bks'].sum(),
+        'vsa_progression_effect': m['vsa_progression_effect_bks'].sum(),  # NEW: VSA Progression
         'customer_mix_effect': m['customer_mix_effect_bks'].sum(),
         'offer_comp_mix_effect': m['offer_comp_mix_effect_bks'].sum(),
         'str_approval_effect': m['str_approval_effect_bks'].sum(),
