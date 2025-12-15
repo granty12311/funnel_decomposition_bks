@@ -22,6 +22,8 @@ try:
         create_lender_aggregate_waterfall, create_lender_drilldown,
         create_lender_waterfall_grid, print_lender_breakdowns,
         create_multi_lender_waterfall_grid,
+        create_tier_channel_waterfall, create_tier_channel_drilldown,
+        TIER_CHANNEL_COLORS,
     )
     # Re-export from visualization_penetration
     from .visualization_penetration import (
@@ -44,6 +46,8 @@ except ImportError:
         create_lender_aggregate_waterfall, create_lender_drilldown,
         create_lender_waterfall_grid, print_lender_breakdowns,
         create_multi_lender_waterfall_grid,
+        create_tier_channel_waterfall, create_tier_channel_drilldown,
+        TIER_CHANNEL_COLORS,
     )
     from visualization_penetration import (
         create_penetration_waterfall_grid,
@@ -52,12 +56,13 @@ except ImportError:
 
 __all__ = [
     'COLOR_POSITIVE', 'COLOR_NEGATIVE', 'COLOR_TOTAL', 'COLOR_CONNECTOR', 'COLOR_MARKET',
-    'CHANNEL_COLORS', 'TIER_COLORS',
+    'CHANNEL_COLORS', 'TIER_COLORS', 'TIER_CHANNEL_COLORS',
     'create_waterfall_grid', 'create_dimension_drilldown', 'print_waterfall_breakdowns',
     'create_channel_waterfall_grid',
     'create_lender_aggregate_waterfall', 'create_lender_drilldown',
     'create_lender_waterfall_grid', 'print_lender_breakdowns',
     'create_multi_lender_waterfall_grid',
+    'create_tier_channel_waterfall', 'create_tier_channel_drilldown',
     'create_penetration_waterfall_grid',
     'format_dimension_name', 'format_effect_labels', 'aggregate_by_dimension',
     'aggregate_penetration_by_dimension', 'aggregate_by_finance_channel',

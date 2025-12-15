@@ -102,12 +102,19 @@ def aggregate_by_dimension(
     segment_detail: pd.DataFrame,
     dimension: str,
     exclude_volume: bool = False,
-    combine_volume_mix: bool = True
+    combine_volume_mix: bool = False
 ) -> pd.DataFrame:
-    """Aggregate effects by dimension values for dimensional waterfall charts."""
+    """Aggregate effects by dimension values for dimensional waterfall charts.
+
+    Args:
+        segment_detail: DataFrame with segment-level effects
+        dimension: Column name to aggregate by
+        exclude_volume: If True, exclude volume effect from results
+        combine_volume_mix: If True, combine volume + customer_mix (default: False for 8-effect display)
+    """
     effect_column_map = {
         'volume_effect': 'volume_effect',
-        'vsa_progression_effect': 'vsa_progression_effect',  # NEW: VSA Progression
+        'vsa_progression_effect': 'vsa_progression_effect',
         'mix_effect': 'mix_effect',
         'customer_mix_effect': 'customer_mix_effect',
         'offer_comp_mix_effect': 'offer_comp_mix_effect',
@@ -137,7 +144,7 @@ def aggregate_by_dimension(
 
     results = []
 
-    # Process combined volume+customer_mix effect
+    # Process combined volume+customer_mix effect (only if combine_volume_mix=True)
     if combine_volume_mix and volume_cols:
         vol_cols_present = [c for c in volume_cols if c in segment_detail.columns]
         if vol_cols_present:
@@ -151,7 +158,7 @@ def aggregate_by_dimension(
                     'impact': combined_effect[dim_val]
                 })
 
-    # Process other effects
+    # Process other effects (all 8 effects when combine_volume_mix=False)
     for effect_col in other_cols:
         if effect_col in segment_detail.columns:
             dim_effects = segment_detail.groupby(dimension)[effect_col].sum()
@@ -174,9 +181,16 @@ def aggregate_by_dimension(
 
 def aggregate_penetration_by_dimension(
     segment_detail: pd.DataFrame,
-    dimension: str
+    dimension: str,
+    combine_volume_mix: bool = False
 ) -> pd.DataFrame:
-    """Aggregate penetration effects by dimension values (in bps)."""
+    """Aggregate penetration effects by dimension values (in bps).
+
+    Args:
+        segment_detail: DataFrame with segment-level effects
+        dimension: Column name to aggregate by
+        combine_volume_mix: If True, combine volume + customer_mix (default: False for 8-effect display)
+    """
     effect_cols_bps = [
         'volume_effect_bps', 'vsa_progression_effect_bps', 'customer_mix_effect_bps', 'offer_comp_mix_effect_bps',
         'str_approval_effect_bps', 'cond_approval_effect_bps',
@@ -188,23 +202,27 @@ def aggregate_penetration_by_dimension(
 
     results = []
 
-    # Combine volume + customer_mix for dimensional charts
-    vol_mix_cols = ['volume_effect_bps', 'customer_mix_effect_bps']
-    vol_mix_present = [c for c in vol_mix_cols if c in available_cols]
+    if combine_volume_mix:
+        # Combine volume + customer_mix for dimensional charts
+        vol_mix_cols = ['volume_effect_bps', 'customer_mix_effect_bps']
+        vol_mix_present = [c for c in vol_mix_cols if c in available_cols]
 
-    if vol_mix_present:
-        vol_mix_data = segment_detail.groupby(dimension)[vol_mix_present].sum()
-        combined = vol_mix_data.sum(axis=1)
+        if vol_mix_present:
+            vol_mix_data = segment_detail.groupby(dimension)[vol_mix_present].sum()
+            combined = vol_mix_data.sum(axis=1)
 
-        for dim_val in combined.index:
-            results.append({
-                dimension: dim_val,
-                'effect_type': 'volume_customer_mix_effect',
-                'impact': combined[dim_val]
-            })
+            for dim_val in combined.index:
+                results.append({
+                    dimension: dim_val,
+                    'effect_type': 'volume_customer_mix_effect',
+                    'impact': combined[dim_val]
+                })
 
-    # Other effects (excluding volume and customer_mix which are combined)
-    other_cols = [c for c in available_cols if c not in vol_mix_cols]
+        # Other effects (excluding volume and customer_mix which are combined)
+        other_cols = [c for c in available_cols if c not in vol_mix_cols]
+    else:
+        # Show all 8 effects separately
+        other_cols = available_cols
 
     for col in other_cols:
         dim_effects = segment_detail.groupby(dimension)[col].sum()
@@ -232,14 +250,14 @@ def save_figure(fig: plt.Figure, output_path: Union[str, Path], description: str
 
 def aggregate_by_finance_channel(
     channel_summaries: pd.DataFrame,
-    combine_volume_mix: bool = True
+    combine_volume_mix: bool = False
 ) -> pd.DataFrame:
     """
     Transform channel_summaries for stacked visualization.
 
     Args:
         channel_summaries: DataFrame with finance_channel, effect_type, booking_impact
-        combine_volume_mix: If True, combine volume + customer_mix into single effect
+        combine_volume_mix: If True, combine volume + customer_mix into single effect (default: False for 8-effect display)
 
     Returns:
         DataFrame with columns: effect_type, finance_channel, impact
@@ -259,6 +277,7 @@ def aggregate_by_finance_channel(
 
         result = pd.concat([combined, other[['effect_type', 'finance_channel', 'impact']]])
     else:
+        # Show all 8 effects separately
         result = df[df['effect_type'] != 'total_change'].rename(columns={'booking_impact': 'impact'})
 
     return result
@@ -266,14 +285,14 @@ def aggregate_by_finance_channel(
 
 def aggregate_by_tier(
     tier_summary: pd.DataFrame,
-    combine_volume_mix: bool = True
+    combine_volume_mix: bool = False
 ) -> pd.DataFrame:
     """
     Transform tier_summary for stacked visualization.
 
     Args:
         tier_summary: DataFrame with lender_tier, effect_type, booking_impact
-        combine_volume_mix: If True, combine volume + customer_mix into single effect
+        combine_volume_mix: If True, combine volume + customer_mix into single effect (default: False for 8-effect display)
 
     Returns:
         DataFrame with columns: effect_type, lender_tier, impact
@@ -293,6 +312,7 @@ def aggregate_by_tier(
 
         result = pd.concat([combined, other[['effect_type', 'lender_tier', 'impact']]])
     else:
+        # Show all 8 effects separately
         result = df[df['effect_type'] != 'total_change'].rename(columns={'booking_impact': 'impact'})
 
     return result

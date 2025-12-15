@@ -257,17 +257,17 @@ def _create_dimensional_waterfall(
     title: str,
     show_legend: bool = True
 ) -> dict:
-    """Create dimensional waterfall chart with combined volume+mix and stacked effects."""
+    """Create dimensional waterfall chart with all 8 effects stacked by dimension."""
 
-    # Aggregate effects by dimension with volume and mix combined
-    dim_agg = aggregate_by_dimension(segment_detail, dimension, combine_volume_mix=True)
+    # Aggregate effects by dimension (all 8 effects separately)
+    dim_agg = aggregate_by_dimension(segment_detail, dimension, combine_volume_mix=False)
 
-    # Get effect types (8 effects with VSA Progression)
+    # Get effect types (all 8 effects)
     effects_dimensional = dim_agg['effect_type'].unique().tolist()
     effect_order = [
-        'volume_mix_effect',
-        'volume_customer_mix_effect',
+        'volume_effect',
         'vsa_progression_effect',
+        'customer_mix_effect',
         'offer_comp_mix_effect',
         'str_approval_effect', 'cond_approval_effect',
         'str_booking_effect', 'cond_booking_effect'
@@ -733,13 +733,14 @@ def _create_channel_stacked_waterfall(
 ) -> None:
     """Create waterfall with effects stacked by finance channel."""
 
-    # Transform data for stacking
-    channel_agg = aggregate_by_finance_channel(channel_summaries, combine_volume_mix=True)
+    # Transform data for stacking (all 8 effects separately)
+    channel_agg = aggregate_by_finance_channel(channel_summaries, combine_volume_mix=False)
 
-    # Get effect types in order (8 effects with VSA Progression)
+    # Get effect types in order (all 8 effects)
     effect_order = [
-        'volume_customer_mix_effect',
+        'volume_effect',
         'vsa_progression_effect',
+        'customer_mix_effect',
         'offer_comp_mix_effect',
         'str_approval_effect', 'cond_approval_effect',
         'str_booking_effect', 'cond_booking_effect'

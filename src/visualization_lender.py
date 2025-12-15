@@ -647,13 +647,14 @@ def _create_tier_stacked_waterfall(
 ) -> None:
     """Create waterfall with effects stacked by lender tier."""
 
-    # Transform data for stacking
-    tier_agg = aggregate_by_tier(tier_summary, combine_volume_mix=True)
+    # Transform data for stacking (all 8 effects separately)
+    tier_agg = aggregate_by_tier(tier_summary, combine_volume_mix=False)
 
-    # Get effect types in order (8 effects with VSA Progression)
+    # Get effect types in order (all 8 effects)
     effect_order = [
-        'volume_customer_mix_effect',
+        'volume_effect',
         'vsa_progression_effect',
+        'customer_mix_effect',
         'offer_comp_mix_effect',
         'str_approval_effect', 'cond_approval_effect',
         'str_booking_effect', 'cond_booking_effect'
@@ -801,24 +802,18 @@ def _create_channel_stacked_waterfall_lender(
 ) -> None:
     """Create waterfall with effects stacked by finance channel (for multi-lender)."""
 
-    # Get effects from channel_summary (combine volume + customer_mix)
+    # Get effects from channel_summary (all 8 effects separately)
     df = channel_summary.copy()
 
-    # Combine volume and customer_mix effects
-    vol_mix = df[df['effect_type'].isin(['volume_effect', 'customer_mix_effect'])]
-    combined = vol_mix.groupby('finance_channel')['booking_impact'].sum().reset_index()
-    combined['effect_type'] = 'volume_customer_mix_effect'
-    combined = combined.rename(columns={'booking_impact': 'impact'})
+    # Keep all effects separate (no combining)
+    channel_agg = df[df['effect_type'] != 'total_change'].copy()
+    channel_agg = channel_agg.rename(columns={'booking_impact': 'impact'})
 
-    other = df[~df['effect_type'].isin(['volume_effect', 'customer_mix_effect', 'total_change'])]
-    other = other.rename(columns={'booking_impact': 'impact'})
-
-    channel_agg = pd.concat([combined, other[['effect_type', 'finance_channel', 'impact']]])
-
-    # Get effect types in order (8 effects with VSA Progression)
+    # Get effect types in order (all 8 effects)
     effect_order = [
-        'volume_customer_mix_effect',
+        'volume_effect',
         'vsa_progression_effect',
+        'customer_mix_effect',
         'offer_comp_mix_effect',
         'str_approval_effect', 'cond_approval_effect',
         'str_booking_effect', 'cond_booking_effect'
@@ -955,3 +950,368 @@ def _create_channel_stacked_waterfall_lender(
         )
     ax.legend(handles=legend_elements, loc='lower center', bbox_to_anchor=(0.5, 0.02),
              fontsize=9, framealpha=0.95, edgecolor='black', ncol=2)
+
+
+# Tier × Channel combination colors
+TIER_CHANNEL_COLORS = {
+    ('T1', 'FF'): '#003366',      # Dark Navy Blue
+    ('T1', 'NON_FF'): '#4a7fb0',  # Medium Navy Blue
+    ('T2', 'FF'): '#2563eb',      # Medium Blue
+    ('T2', 'NON_FF'): '#60a5fa',  # Light Medium Blue
+    ('T3', 'FF'): '#7dd3fc',      # Light Sky Blue
+    ('T3', 'NON_FF'): '#bae6fd',  # Very Light Blue
+}
+
+
+def create_tier_channel_waterfall(
+    results,  # MultiLenderResults
+    output_path: str = None
+) -> plt.Figure:
+    """
+    Create waterfall chart showing effects stacked by tier×channel combination.
+
+    This allows identification of T2 FF vs T2 NON_FF contribution to each effect.
+
+    Args:
+        results: MultiLenderResults from calculate_multi_lender_decomposition
+        output_path: Optional path to save figure
+
+    Returns:
+        matplotlib Figure object
+    """
+    metadata = results.metadata
+    date_a = metadata['date_a']
+    date_b = metadata['date_b']
+    period_1_bks = metadata['period_1_total_bookings']
+    period_2_bks = metadata['period_2_total_bookings']
+
+    delta = period_2_bks - period_1_bks
+    delta_sign = '+' if delta >= 0 else ''
+
+    fig, ax = plt.subplots(figsize=(20, 10))
+
+    fig.suptitle(
+        f'Multi-Lender Booking Decomposition: {date_a} → {date_b}\n'
+        f'Total Change: {delta_sign}{delta:,.0f} (By Tier × Finance Channel)',
+        fontsize=14, fontweight='bold', y=0.98
+    )
+
+    # Build tier×channel breakdown from lender_results
+    tier_channel_effects = _aggregate_tier_channel_effects(results)
+
+    # Effect order (all 8 effects)
+    effect_order = [
+        'volume_effect',
+        'vsa_progression_effect',
+        'customer_mix_effect',
+        'offer_comp_mix_effect',
+        'str_approval_effect', 'cond_approval_effect',
+        'str_booking_effect', 'cond_booking_effect'
+    ]
+    effects = [e for e in effect_order if e in tier_channel_effects['effect_type'].unique()]
+
+    labels = ['Start'] + effects + ['End']
+    x_pos = np.arange(len(labels))
+
+    # Tier × Channel combinations in order
+    tier_channel_combos = [
+        ('T1', 'FF'), ('T1', 'NON_FF'),
+        ('T2', 'FF'), ('T2', 'NON_FF'),
+        ('T3', 'FF'), ('T3', 'NON_FF')
+    ]
+
+    # Calculate y-axis limits
+    all_values = [period_1_bks, period_2_bks]
+    cumulative = period_1_bks
+
+    for effect in effects:
+        effect_data = tier_channel_effects[tier_channel_effects['effect_type'] == effect]
+        total_effect = effect_data['impact'].sum()
+
+        pos_sum = effect_data[effect_data['impact'] > 0]['impact'].sum()
+        neg_sum = effect_data[effect_data['impact'] < 0]['impact'].sum()
+
+        if pos_sum > 0:
+            all_values.append(cumulative + pos_sum)
+        if neg_sum < 0:
+            all_values.append(cumulative + neg_sum)
+
+        all_values.extend([cumulative, cumulative + total_effect])
+        cumulative += total_effect
+
+    data_min = min(all_values)
+    data_max = max(all_values)
+    data_range = max(data_max - data_min, 1)
+
+    padding_below = max(data_range * 0.3, data_max * 0.08)
+    padding_above = max(data_range * 0.2, data_max * 0.08)
+    y_min = data_min - padding_below
+    y_max = data_max + padding_above
+    y_range = y_max - y_min
+    label_offset = y_range * 0.03
+
+    # Plot Start bar
+    ax.bar(0, period_1_bks, color=COLOR_TOTAL, edgecolor='black', linewidth=1.5, width=0.78)
+    text_y_pos = (period_1_bks + y_min) / 2
+    ax.text(0, text_y_pos, format_number(period_1_bks, 0),
+           ha='center', va='center', fontsize=10, fontweight='bold')
+
+    cumulative = period_1_bks
+
+    # Plot each effect with tier×channel stacking
+    for i, effect in enumerate(effects):
+        x = i + 1
+
+        effect_data = tier_channel_effects[tier_channel_effects['effect_type'] == effect]
+        total_effect = effect_data['impact'].sum()
+
+        if abs(total_effect) < 0.01:
+            ax.plot([x-1+0.3, x-0.3], [cumulative, cumulative],
+                   color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
+            ax.plot(x, cumulative, marker='o', markersize=6, color=COLOR_CONNECTOR,
+                   markeredgecolor='black', markeredgewidth=1.5, zorder=3)
+            ax.text(x, cumulative - label_offset, '+0',
+                   ha='center', va='top', fontsize=10, fontweight='bold',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                            edgecolor='black', linewidth=1.5, alpha=0.95))
+        else:
+            pos_bottom = cumulative
+            neg_bottom = cumulative
+
+            for tier, channel in tier_channel_combos:
+                combo_data = effect_data[
+                    (effect_data['lender_tier'] == tier) &
+                    (effect_data['finance_channel'] == channel)
+                ]
+                if len(combo_data) == 0:
+                    continue
+
+                val = combo_data['impact'].iloc[0]
+                color = TIER_CHANNEL_COLORS.get((tier, channel), '#999999')
+
+                if val >= 0:
+                    rect = Rectangle((x - 0.3, pos_bottom), 0.6, val,
+                                   facecolor=color, edgecolor='black',
+                                   linewidth=0.5, alpha=0.85)
+                    ax.add_patch(rect)
+                    pos_bottom += val
+                else:
+                    rect = Rectangle((x - 0.3, neg_bottom + val), 0.6, abs(val),
+                                   facecolor=color, edgecolor='black',
+                                   linewidth=0.5, alpha=0.85)
+                    ax.add_patch(rect)
+                    neg_bottom += val
+
+            label_y_pos = min(cumulative, cumulative + total_effect, neg_bottom)
+            sign = '+' if total_effect >= 0 else ''
+            ax.text(x, label_y_pos - label_offset, f'{sign}{format_number(total_effect, 0)}',
+                   ha='center', va='top', fontsize=10, fontweight='bold',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                            edgecolor='black', linewidth=1.5, alpha=0.95))
+
+            ax.plot([x-1+0.3, x-0.3], [cumulative, cumulative],
+                   color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
+
+        cumulative += total_effect
+
+    # Plot End bar
+    ax.bar(len(labels)-1, period_2_bks, color=COLOR_TOTAL, edgecolor='black',
+          linewidth=1.5, width=0.78)
+    text_y_pos_end = (period_2_bks + y_min) / 2
+    ax.text(len(labels)-1, text_y_pos_end, format_number(period_2_bks, 0),
+           ha='center', va='center', fontsize=10, fontweight='bold')
+
+    ax.plot([len(labels)-2+0.3, len(labels)-1-0.3], [cumulative, cumulative],
+           color=COLOR_CONNECTOR, linestyle='--', linewidth=1, alpha=0.6)
+
+    # Formatting
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(format_effect_labels(labels), rotation=45, ha='right')
+    ax.set_ylabel('Bookings', fontsize=11, fontweight='bold')
+    ax.set_title('By Lender Tier × Finance Channel', fontsize=12, fontweight='bold', pad=10)
+    ax.set_ylim(y_min, y_max)
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+    ax.axhline(y=0, color='black', linewidth=0.8)
+
+    # Legend (2 rows: FF then NON_FF)
+    legend_elements = []
+    for tier, channel in tier_channel_combos:
+        label = f'{tier} {"Non-FF" if channel == "NON_FF" else "FF"}'
+        legend_elements.append(
+            mpatches.Patch(facecolor=TIER_CHANNEL_COLORS.get((tier, channel), '#999999'),
+                          edgecolor='black', label=label, alpha=0.85)
+        )
+    ax.legend(handles=legend_elements, loc='lower center', bbox_to_anchor=(0.5, 0.02),
+             fontsize=9, framealpha=0.95, edgecolor='black', ncol=6)
+
+    plt.tight_layout()
+
+    if output_path:
+        save_figure(fig, output_path, "Tier×Channel waterfall")
+
+    return fig
+
+
+def _aggregate_tier_channel_effects(results) -> pd.DataFrame:
+    """
+    Aggregate effects by tier × channel combination from MultiLenderResults.
+
+    Args:
+        results: MultiLenderResults object
+
+    Returns:
+        DataFrame with columns: lender_tier, finance_channel, effect_type, impact
+    """
+    # Build from lender_results which has channel-level details
+    all_effects = []
+
+    for lender, lender_result in results.lender_results.items():
+        tier = get_lender_tier(lender)
+
+        # Check if lender_result has channel_summaries (FinanceChannelResults)
+        if hasattr(lender_result, 'channel_summaries') and lender_result.channel_summaries is not None:
+            for _, row in lender_result.channel_summaries.iterrows():
+                if row['effect_type'] != 'total_change':
+                    all_effects.append({
+                        'lender': lender,
+                        'lender_tier': tier,
+                        'finance_channel': row['finance_channel'],
+                        'effect_type': row['effect_type'],
+                        'impact': row['booking_impact']
+                    })
+        else:
+            # Fallback: use lender summary and split by channel from metadata
+            channel_totals = results.metadata.get('channel_totals', {})
+            lender_summary = lender_result.summary if hasattr(lender_result, 'summary') else None
+
+            if lender_summary is not None:
+                for _, row in lender_summary.iterrows():
+                    if row['effect_type'] not in ['total_change', 'interaction_effect']:
+                        # Split proportionally by channel (rough estimate)
+                        for channel in ['FF', 'NON_FF']:
+                            all_effects.append({
+                                'lender': lender,
+                                'lender_tier': tier,
+                                'finance_channel': channel,
+                                'effect_type': row['effect_type'],
+                                'impact': row['booking_impact'] * 0.5  # Split evenly as fallback
+                            })
+
+    if not all_effects:
+        return pd.DataFrame(columns=['lender_tier', 'finance_channel', 'effect_type', 'impact'])
+
+    df = pd.DataFrame(all_effects)
+
+    # Aggregate by tier × channel × effect
+    agg = df.groupby(['lender_tier', 'finance_channel', 'effect_type'])['impact'].sum().reset_index()
+
+    return agg
+
+
+def create_tier_channel_drilldown(
+    results,  # MultiLenderResults
+    output_path: str = None
+) -> plt.Figure:
+    """
+    Create horizontal bar chart showing each effect broken down by tier×channel.
+
+    This provides a detailed view of how each tier and channel contributes to each effect.
+
+    Args:
+        results: MultiLenderResults from calculate_multi_lender_decomposition
+        output_path: Optional path to save figure
+
+    Returns:
+        matplotlib Figure object
+    """
+    metadata = results.metadata
+    date_a = metadata['date_a']
+    date_b = metadata['date_b']
+
+    # Build tier×channel breakdown
+    tier_channel_effects = _aggregate_tier_channel_effects(results)
+
+    # Effect order (all 8 effects)
+    effect_order = [
+        'volume_effect',
+        'vsa_progression_effect',
+        'customer_mix_effect',
+        'offer_comp_mix_effect',
+        'str_approval_effect', 'cond_approval_effect',
+        'str_booking_effect', 'cond_booking_effect'
+    ]
+    effects = [e for e in effect_order if e in tier_channel_effects['effect_type'].unique()]
+
+    # Create figure with subplots for each effect
+    n_effects = len(effects)
+    n_cols = 2
+    n_rows = (n_effects + 1) // 2
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4 * n_rows))
+    axes_flat = axes.flatten() if n_effects > 2 else [axes[0], axes[1]] if n_effects == 2 else [axes]
+
+    fig.suptitle(
+        f'Effect Breakdown by Tier × Finance Channel\n{date_a} → {date_b}',
+        fontsize=14, fontweight='bold', y=0.98
+    )
+
+    # Tier × Channel combinations for y-axis
+    tier_channel_labels = ['T1 FF', 'T1 Non-FF', 'T2 FF', 'T2 Non-FF', 'T3 FF', 'T3 Non-FF']
+    tier_channel_combos = [
+        ('T1', 'FF'), ('T1', 'NON_FF'),
+        ('T2', 'FF'), ('T2', 'NON_FF'),
+        ('T3', 'FF'), ('T3', 'NON_FF')
+    ]
+
+    for idx, effect in enumerate(effects):
+        ax = axes_flat[idx]
+
+        effect_data = tier_channel_effects[tier_channel_effects['effect_type'] == effect]
+
+        # Get values for each tier×channel combo
+        values = []
+        colors = []
+        for tier, channel in tier_channel_combos:
+            combo_data = effect_data[
+                (effect_data['lender_tier'] == tier) &
+                (effect_data['finance_channel'] == channel)
+            ]
+            val = combo_data['impact'].iloc[0] if len(combo_data) > 0 else 0
+            values.append(val)
+            colors.append(TIER_CHANNEL_COLORS.get((tier, channel), '#999999'))
+
+        # Create horizontal bar chart
+        y_pos = np.arange(len(tier_channel_labels))
+        bars = ax.barh(y_pos, values, color=colors, edgecolor='black', linewidth=0.5, alpha=0.85)
+
+        # Add value labels
+        for i, (bar, val) in enumerate(zip(bars, values)):
+            if abs(val) > 0.1:
+                sign = '+' if val >= 0 else ''
+                label_x = val + (abs(val) * 0.05) if val >= 0 else val - (abs(val) * 0.05)
+                ha = 'left' if val >= 0 else 'right'
+                ax.text(label_x, i, f'{sign}{format_number(val, 0)}',
+                       va='center', ha=ha, fontsize=9, fontweight='bold')
+
+        # Formatting
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(tier_channel_labels)
+        ax.axvline(x=0, color='black', linewidth=0.8)
+        ax.grid(axis='x', alpha=0.3, linestyle='--')
+
+        total_impact = sum(values)
+        effect_label = format_effect_labels([effect])[0]
+        ax.set_title(f'{effect_label} (Total: {total_impact:+,.0f})',
+                    fontsize=11, fontweight='bold', pad=10)
+        ax.set_xlabel('Booking Impact', fontsize=10)
+
+    # Hide empty subplots
+    for idx in range(len(effects), len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+
+    plt.tight_layout()
+
+    if output_path:
+        save_figure(fig, output_path, "Tier×Channel drilldown")
+
+    return fig
