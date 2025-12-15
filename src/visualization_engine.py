@@ -22,6 +22,7 @@ try:
         create_lender_aggregate_waterfall, create_lender_drilldown,
         create_lender_waterfall_grid, print_lender_breakdowns,
         create_multi_lender_waterfall_grid,
+        create_tier_by_channel_waterfall_grid,
         create_tier_channel_waterfall, create_tier_channel_drilldown,
         TIER_CHANNEL_COLORS,
     )
@@ -46,6 +47,7 @@ except ImportError:
         create_lender_aggregate_waterfall, create_lender_drilldown,
         create_lender_waterfall_grid, print_lender_breakdowns,
         create_multi_lender_waterfall_grid,
+        create_tier_by_channel_waterfall_grid,
         create_tier_channel_waterfall, create_tier_channel_drilldown,
         TIER_CHANNEL_COLORS,
     )
@@ -62,6 +64,7 @@ __all__ = [
     'create_lender_aggregate_waterfall', 'create_lender_drilldown',
     'create_lender_waterfall_grid', 'print_lender_breakdowns',
     'create_multi_lender_waterfall_grid',
+    'create_tier_by_channel_waterfall_grid',
     'create_tier_channel_waterfall', 'create_tier_channel_drilldown',
     'create_penetration_waterfall_grid',
     'format_dimension_name', 'format_effect_labels', 'aggregate_by_dimension',
